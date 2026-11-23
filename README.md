@@ -8,7 +8,7 @@ Instala dependencias con `npm ci`, ejecuta `npm run demo:simulated` y abre `http
 
 ## Arrancar la aplicación
 
-El producto principal es la app Node local con persistencia de servidor. Ver [inicio paso a paso](docs/START.md). Con Node.js 22+, extrae el ZIP y ejecuta `npm run demo:simulated`, o `iniciar_demo.bat` en Windows. Abre `http://localhost:4875`. No necesita cuentas ni consumo para el modo simulado.
+El producto principal es la app Node local con persistencia de servidor. Ver [inicio paso a paso](docs/START.md). Con Node.js 22+, descarga o clona el repositorio, ejecuta `npm ci` y después `npm run demo:simulated`, o `iniciar_demo.bat` en Windows. Abre `http://localhost:4875`. No necesita cuentas ni consumo para el modo simulado.
 
 Guarda y recarga el espacio para compartir expedientes/avisos entre ventanas. Incluye control de revisión para bloquear sobrescrituras de otra sesión. El rol ficticio filtra la bandeja, NO es autenticación. Solo localhost, no producción.
 
@@ -75,4 +75,4 @@ Este proyecto usa solo datos inventados. No incluye correos históricos, cliente
 
 La auditoría del paquete es un control acotado, no una garantía de anonimato universal. No añadas datos reales a fixtures, capturas, commits o incidencias. Revisa el árbol completo antes de publicar. Esta copia está preparada para publicación como repositorio independiente. Los conectores siguen desactivados; publicar fuentes no despliega ni activa el servidor.
 
-El subconjunto del preparador existente retiene su licencia MIT y atribución pública al autor. No se elige por el propietario la licencia global del nuevo proyecto. Decidirla antes de distribuir código como software abierto.
+El subconjunto del preparador existente retiene su licencia MIT y atribución pública al autor. No se ha añadido una licencia global al proyecto. La publicación permite consultar el código, pero no debe interpretarse como una concesión de licencia de código abierto para el conjunto. La licencia MIT del subconjunto reutilizado se conserva en `server/vendor/LICENSE-processor`.
