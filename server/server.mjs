@@ -1,9 +1,11 @@
+import {existsSync,readFileSync,writeFileSync,chmodSync,mkdirSync} from 'node:fs';
+import {buildEnv,validateConfig,parseEnv} from '../scripts/config.mjs';
 import {createReceiver} from './receiver.mjs';
 import {dossierWorkbook} from './dossier.mjs';
 import {processMail,syntheticEvent} from './automation.mjs';
 import {readDriveText} from './drive-text.mjs';
 import {openStore} from './store.mjs';
-import {resolve} from 'node:path';
+import {resolve,dirname} from 'node:path';
 import {claudeService,mockData} from './adapters.mjs';
 import http from 'node:http';
 import {readFile} from 'node:fs/promises';
@@ -19,12 +21,17 @@ if(mock&&(enabled||process.env.CLAUDE_ENABLED==='true'))throw Error('Mock mode c
 const claude=claudeService();
 const env={tenant:process.env.MS_TENANT_ID,client:process.env.MS_CLIENT_ID,secret:process.env.MS_CLIENT_SECRET,redirect:process.env.MS_REDIRECT_URI||origin+'/auth/callback'};
 const scopes=['Mail.Read','Files.Read']; // Deliberately no write or send scopes.
-const store=await openStore(resolve(process.env.APP_DATA_PATH||'data/workspace.json'));
+const dataMode=mock?'simulation':enabled?'real':'local';
+const dataPath=resolve(process.env.APP_DATA_PATH||`data/${dataMode==='simulation'?'simulation':dataMode==='real'?'real':'local'}.json`);
+{const marker=dataPath+'.mode';let prev='';try{prev=readFileSync(marker,'utf8').trim();}catch{}
+ if(prev&&prev!==dataMode)throw Error(`DATA_MODE_MISMATCH: ${dataPath} belongs to mode "${prev}". Use another APP_DATA_PATH so simulated, local and real data never mix.`);
+ if(!prev){mkdirSync(dirname(dataPath),{recursive:true});writeFileSync(marker,dataMode);}}
+const store=await openStore(dataPath);
 if(mock&&process.env.DEMO_EVENT_ON_START==='true'){const current=store.read();const out=await processMail(current.state,await syntheticEvent('complete'));if(!out.duplicate)await store.write(current.revision,current.state);console.log('Synthetic mail event processed automatically on start; external providers disabled.');}
 const sessions=new Map();const idleMs=30*60*1000;
 let MsalClient;
-const makeClient=()=>new MsalClient({auth:{clientId:env.client,authority:`https://login.microsoftonline.com/${env.tenant}`,clientSecret:env.secret}});
-if(enabled){if(!env.tenant||!env.client||!env.secret)throw Error('Graph enabled but configuration incomplete');if(env.redirect!==origin+'/auth/callback')throw Error('This development sample accepts only its localhost callback');if(!/^[a-zA-Z0-9.-]+$/.test(env.tenant))throw Error('Invalid tenant identifier');const sdk=await import('@azure/msal-node');MsalClient=sdk.ConfidentialClientApplication;}
+const makeClient=()=>new MsalClient({auth:{clientId:env.client,authority:`https://login.microsoftonline.com/${env.tenant}`,...(env.secret?{clientSecret:env.secret}:{})}});
+if(enabled){if(!env.tenant||!env.client)throw Error('Graph enabled but configuration incomplete');if(env.redirect!==origin+'/auth/callback')throw Error('This development sample accepts only its localhost callback');if(!/^[a-zA-Z0-9.-]+$/.test(env.tenant))throw Error('Invalid tenant identifier');const sdk=await import('@azure/msal-node');MsalClient=env.secret?sdk.ConfidentialClientApplication:sdk.PublicClientApplication;}
 const json=(res,code,value)=>{res.writeHead(code,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});res.end(JSON.stringify(value));};
 const token=()=>randomBytes(32).toString('base64url');
 function session(req){const id=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('sid='))?.slice(4);const s=id&&sessions.get(id);if(s&&s.expires>Date.now()){s.expires=Date.now()+idleMs;return s;}if(id)sessions.delete(id);return null;}
@@ -40,14 +47,26 @@ function startReceiver(s){
  const run=async()=>{try{if(Date.now()>stopAt)throw Error('LOCAL_SESSION_EXPIRED');const out=await receiver.tick();intakeStatus={enabled:true,running:true,state:out.busy?'busy':out.baseline?'waiting_for_changes':'baseline',lastRun:new Date().toISOString()};}catch(e){clearInterval(receiverTimer);receiverTimer=null;intakeStatus={enabled:true,running:false,state:['GRAPH_THROTTLED_STOPPED','DELTA_EXPIRED_MANUAL_RESET_REQUIRED','LOCAL_SESSION_EXPIRED','RECEIVER_SCOPE_CHANGED_USE_NEW_WORKSPACE'].includes(e.message)?e.message:'STOPPED_REVIEW_CONFIGURATION_OR_REAUTHENTICATE',lastRun:new Date().toISOString()};}};
  run();receiverTimer=setInterval(run,intakeMinutes*60000);receiverTimer.unref();
 }
-const assets={'/':'index.html','/index.html':'index.html','/app.mjs':'app.mjs','/core.mjs':'core.mjs','/integration.mjs':'integration.mjs','/catalog.mjs':'catalog.mjs','/style.css':'style.css'};
+const assets={'/':'index.html','/index.html':'index.html','/app.mjs':'app.mjs','/core.mjs':'core.mjs','/integration.mjs':'integration.mjs','/catalog.mjs':'catalog.mjs','/style.css':'style.css','/setup':'setup.html','/setup.mjs':'setup.mjs'};
 const server=http.createServer(async(req,res)=>{
  try{
  if(req.headers.host!==`localhost:${port}`&&req.headers.host!==`127.0.0.1:${port}`)return json(res,403,{error:'Invalid host'});
  if(req.headers.origin&&req.headers.origin!==origin)return json(res,403,{error:'Origin not allowed'});
- if(req.method!=='GET'&&!(req.method==='POST'&&['/api/claude/analyze','/api/workspace','/api/events/synthetic'].includes(req.url)))return json(res,405,{error:'No send or tenant write endpoint.'});
+ if(req.method!=='GET'&&!(req.method==='POST'&&['/api/claude/analyze','/api/workspace','/api/events/synthetic','/api/setup'].includes(req.url)))return json(res,405,{error:'No send or tenant write endpoint.'});
  const u=new URL(req.url,origin),s=session(req);
- if(u.pathname==='/api/status'){const ss=s||makeSession(res);ss.csrf||=token();return json(res,200,{graphConfigured:enabled,authenticated:!!s?.account,mock,mode:mock?'simulation-no-network':'read-only-development',permissions:scopes,send:false,write:false,csrf:ss.csrf,workspace:true,receiver:{...intakeStatus,intervalMinutes:intakeMinutes},claude:mock?{ready:true,model:'simulation'}:claude.status});}
+ if(u.pathname==='/api/status'){const ss=s||makeSession(res);ss.csrf||=token();return json(res,200,{graphConfigured:enabled,authenticated:!!s?.account,mock,mode:mock?'simulation-no-network':'read-only-development',permissions:scopes,clientType:env.secret?'confidential':'public',send:false,write:false,csrf:ss.csrf,workspace:true,receiver:{...intakeStatus,intervalMinutes:intakeMinutes},claude:mock?{ready:true,model:'simulation'}:claude.status});}
+
+ if(u.pathname==='/api/setup'){
+  if(req.method==='GET'){const cur=existsSync('.env')?parseEnv(readFileSync('.env','utf8')):{};return json(res,200,{envExists:existsSync('.env'),checks:validateConfig(cur),running:{graph:enabled,mock},note:'Los cambios se aplican al reiniciar el servidor.'});}
+  if(req.headers.origin!==origin||!s||!same(s.csrf,req.headers['x-csrf-token']))return json(res,403,{error:'LOCAL_CONFIRMATION_REQUIRED'});
+  let body='';for await(const chunk of req){body+=chunk;if(body.length>6000)return json(res,413,{error:'LIMIT'});}
+  let i;try{i=JSON.parse(body);}catch{return json(res,400,{error:'INVALID_JSON'});}
+  if(existsSync('.env')&&i.overwrite!==true)return json(res,409,{error:'ENV_EXISTS_CONFIRM_OVERWRITE'});
+  const r=buildEnv({tenant:i.tenant,client:i.client,secret:i.secret,folder:i.folder||'inbox',since:i.since,intake:i.intake===true,approved:i.approved===true,claudeKey:i.claudeKey,claudeModel:i.claudeModel,claudeMax:i.claudeMax,claudeAccept:i.claudeAccept===true});
+  if(r.errors.length)return json(res,400,{error:'INVALID_CONFIG',details:r.errors});
+  writeFileSync('.env',r.text,{mode:0o600});try{chmodSync('.env',0o600);}catch{}
+  return json(res,200,{saved:true,restartRequired:true,checks:validateConfig(parseEnv(r.text))});
+ }
  if(u.pathname==='/api/dossier'){
   if(!s)return json(res,401,{error:'LOCAL_SESSION_REQUIRED'});const c=store.read().state.cases.find(c=>c.id===u.searchParams.get('id'));if(!c)return json(res,404,{error:'CASE_NOT_FOUND'});
   try{const buffer=await dossierWorkbook(c);res.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','content-disposition':'attachment; filename=generic-reviewed-dossier.xlsx','cache-control':'no-store'});return res.end(Buffer.from(buffer));}catch{return json(res,409,{error:'SAVE_REVIEWED_CASE_BEFORE_EXPORT'});}
