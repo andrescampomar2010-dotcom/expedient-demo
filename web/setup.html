@@ -1,0 +1,21 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'"><title>Expedient · Conectar tus cuentas</title><link rel="stylesheet" href="/style.css"></head>
+<body><main class="setup">
+<h1>Conectar tus cuentas</h1>
+<p>Esta pantalla guarda tu configuración <strong>solo en este equipo</strong> (archivo <code>.env</code>, fuera de Git). Expedient es solo lectura: no envía correo ni escribe en Microsoft.</p>
+<p><strong>Para Microsoft:</strong> este proyecto no incluye ninguna aplicación registrada por su autor, así que necesitas registrar la tuya en Microsoft Entra (requiere acceso a un directorio Entra y, en cuentas de empresa, permiso del administrador). Es una limitación de esta distribución, no de OAuth en general. Guía: <code>docs/CONECTAR.md</code>. Puedes dejar Microsoft vacío y usar solo la demo o solo Claude.</p>
+<div id="state" aria-live="polite"></div>
+<form id="f" autocomplete="off">
+<h2>Microsoft (solo lectura, opcional)</h2><p><label>Tenant (<code>consumers</code> para cuenta personal, o el ID de tu directorio)<br><input name="tenant" value="consumers" required></label></p>
+<p><label>Application (client) ID<br><input name="client" required size="40" placeholder="00000000-0000-0000-0000-000000000000"></label></p>
+<p><label>Secreto de cliente (déjalo vacío si registraste un cliente público)<br><input name="secret" type="password" autocomplete="off"></label></p>
+<p><label><input type="checkbox" name="intake"> Activar receptor automático (lee una carpeta cada hora)</label></p>
+<fieldset id="intakeBox" hidden><p><label>Carpeta <input name="folder" value="inbox"></label></p><p><label>Desde (ISO UTC) <input name="since" placeholder="2026-11-24T00:00:00Z"></label></p><p><label><input type="checkbox" name="approved"> La cuenta y la carpeta son mías y autorizo su lectura</label></p></fieldset>
+<h2>Claude (opcional, de pago)</h2>
+<p>Apagado por defecto. Usa la API de Anthropic con <strong>tu propia clave y a tu coste</strong> (una suscripción de chat no la incluye). La app no tiene tope de gasto: fija un límite en la consola de Anthropic. Solo se envía el texto exacto que confirmes en cada análisis.</p>
+<p><label>Clave API de Anthropic<br><input name="claudeKey" type="password" autocomplete="off"></label></p>
+<p><label>Modelo exacto habilitado en tu cuenta<br><input name="claudeModel" placeholder="nombre del modelo"></label></p>
+<p><label>Tokens máximos de salida (100-1000) <input name="claudeMax" value="600" size="5"></label></p>
+<p><label><input type="checkbox" name="claudeAccept"> Acepto el gasto por uso y el envío a Anthropic del texto que confirme</label></p>
+<p><label><input type="checkbox" name="overwrite"> Sobrescribir la configuración existente (se reescribe entera)</label></p>
+<p><button type="submit">Guardar configuración local</button></p></form>
+<p><a href="/">Volver a la app</a></p></main><script type="module" src="/setup.mjs"></script></body></html>
