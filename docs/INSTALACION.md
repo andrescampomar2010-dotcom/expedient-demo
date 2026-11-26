@@ -29,3 +29,6 @@ La base es compartida, no colaborativa en vivo. Cada guardado lleva la revisión
 
 ## Docker y proxy
 En el entorno de preparación no hay Docker ni nginx: la imagen no se ha construido y el proxy no se ha probado. Los ficheros de `deploy/` son plantillas sin validar en ejecución.
+
+## Alertas de lectura de correo
+Si el receptor se detiene, `/api/status` muestra `receiver.alert`, el código y la acción a seguir, se escribe una línea `ALERTA receptor de correo detenido: ...` en el registro del servicio (journald o `docker logs`) y `/api/health` devuelve 503 para que la monitorización de la empresa lo recoja. Los mensajes llevan solo códigos, nunca el texto del error original. Probado: la lógica (`tests/health.test.mjs`). **No probado:** el camino completo con un fallo real de Microsoft Graph (requiere cuenta real); la interfaz todavía no muestra un aviso visual de la alerta ni explica el error 409 de guardado con un mensaje propio.
