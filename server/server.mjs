@@ -22,6 +22,7 @@ if(publicUrl&&!/^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(publicUrl))throw Error('AP
 const origin=publicUrl||`http://localhost:${port}`,bindHost=process.env.APP_BIND||'127.0.0.1';
 const allowedHosts=publicUrl?[new URL(publicUrl).host]:[`localhost:${port}`,`127.0.0.1:${port}`];
 const authLocal=process.env.APP_AUTH==='local';
+const production=authLocal||process.env.APP_MODE==='production';
 const usersPath=resolve(process.env.APP_USERS_PATH||'data/users.json');
 const users=createUsers(authLocal&&existsSync(usersPath)?JSON.parse(readFileSync(usersPath,'utf8')):undefined);
 const saveUsers=()=>{mkdirSync(dirname(usersPath),{recursive:true});writeFileSync(usersPath,JSON.stringify(users.doc),{mode:0o600});};
@@ -96,7 +97,7 @@ const server=http.createServer(async(req,res)=>{
  }
  if(req.method!=='GET'&&!(req.method==='POST'&&['/api/claude/analyze','/api/workspace','/api/events/synthetic','/api/setup','/api/shipments/propose'].includes(req.url)))return json(res,405,{error:'No send or tenant write endpoint.'});
  const u=new URL(req.url,origin),s=session(req);
- if(u.pathname==='/api/status'){const ss=s||makeSession(res);ss.csrf||=token();return json(res,200,{graphConfigured:enabled,authenticated:!!s?.account,mock,mode:mock?'simulation-no-network':'read-only-development',permissions:scopes,clientType:env.secret?'confidential':'public',send:false,write:false,csrf:ss.csrf,workspace:true,receiver:{...intakeStatus,intervalMinutes:intakeMinutes},claude:mock?{ready:true,model:'simulation'}:claude.status,aiProposer:{ready:aiProposer.ready||aiProposer.simulated,simulated:aiProposer.simulated,auto:aiProposer.auto,maxPerDay:aiProposer.maxPerDay},sentFolder:!!sentFolder});}
+ if(u.pathname==='/api/status'){const ss=s||makeSession(res);ss.csrf||=token();return json(res,200,{production,graphConfigured:enabled,authenticated:!!s?.account,mock,mode:mock?'simulation-no-network':'read-only-development',permissions:scopes,clientType:env.secret?'confidential':'public',send:false,write:false,csrf:ss.csrf,workspace:true,receiver:{...intakeStatus,intervalMinutes:intakeMinutes},claude:mock?{ready:true,model:'simulation'}:claude.status,aiProposer:{ready:aiProposer.ready||aiProposer.simulated,simulated:aiProposer.simulated,auto:aiProposer.auto,maxPerDay:aiProposer.maxPerDay},sentFolder:!!sentFolder});}
 
  if(u.pathname==='/api/setup'){
   if(req.method==='GET'){const cur=existsSync('.env')?parseEnv(readFileSync('.env','utf8')):{};return json(res,200,{envExists:existsSync('.env'),checks:validateConfig(cur),running:{graph:enabled,mock},note:'Los cambios se aplican al reiniciar el servidor.'});}
@@ -168,7 +169,7 @@ const server=http.createServer(async(req,res)=>{
   if(u.pathname==='/api/graph/files'){const r=await graph(s,'/me/drive/root/children?$top=20&$select=id,name,file,folder,lastModifiedDateTime');s.listedFiles=r.value.filter(f=>f.file).map(f=>f.id);return json(res,200,{source:'Microsoft Graph, live',items:r.value});}
   return json(res,404,{error:'Read route not implemented'});
  }
- if(assets[u.pathname]){const file=assets[u.pathname];let body=await readFile(new URL('../web/'+file,import.meta.url));if(file==='index.html')body=Buffer.from(body.toString().replace("connect-src 'none'","connect-src 'self'"));res.writeHead(200,{'content-type':file.endsWith('.mjs')?'text/javascript':file.endsWith('.css')?'text/css':'text/html','cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"});return res.end(body);}
+ if(assets[u.pathname]){const file=assets[u.pathname];let body=await readFile(new URL('../web/'+file,import.meta.url));if(file==='index.html'){let h=body.toString().replace("connect-src 'none'","connect-src 'self'");if(production)h=h.replace('DEMO LOCAL · DATOS FICTICIOS','PRODUCCIÓN').replace('Expedient · Demo documental','Expedient').replace(/<label>Rol ficticio.*?<\/select><\/label>/,'').replace(/<p>Servidor de demostración solo localhost.*?<\/p>/,'').replace('Sin conexión externa','Sin datos de demostración').replace(/<footer>.*?<\/footer>/,'<footer>Expedient. Los datos extraídos automáticamente o por OCR son propuestas: confirma siempre con la fuente.</footer>');body=Buffer.from(h);}res.writeHead(200,{'content-type':file.endsWith('.mjs')?'text/javascript':file.endsWith('.css')?'text/css':'text/html','cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"});return res.end(body);}
  json(res,404,{error:'Not found'});
  }catch(err){json(res,500,{error:err.message==='AUTH_REQUIRED'?'SIGN_IN_REQUIRED':'Request failed. Review server configuration without logging tokens.'});}
 });
