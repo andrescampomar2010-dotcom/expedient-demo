@@ -58,3 +58,18 @@ Qué NO hace: el texto de OCR nunca vincula un correo ni confirma un DUA, kilos 
 Dependencias (se instalan aparte, no van en `npm ci`): `tesseract-ocr` (Apache-2.0), `tesseract-ocr-spa` y `tesseract-ocr-eng` (modelos tessdata_fast, Apache-2.0), `poppler-utils` (GPL, solo como programa externo que se ejecuta, no se enlaza). Recursos: unos 0,5 a 2 s por página sintética limpia o ruidosa en la máquina de pruebas, un proceso por documento, memoria moderada; no se midió con escaneos reales ni con carga.
 Comprobar antes de arrancar: `npm run ocr:check` avisa de lo que falte. Si el paquete de idioma no existe: `node scripts/ocr-setup.mjs --fetch data/tessdata`, copia también `eng.traineddata` y exporta `TESSDATA_PREFIX=data/tessdata`. La descarga se hace una vez en la instalación y se verifica con SHA-256 (spa.traineddata, 2294433 bytes, 6f2e04d0…b464). Si falta algo, la app sigue funcionando y marca el escaneo "OCR no disponible". `OCR_ENABLED=false` lo desactiva.
 Probado aquí (sintético, tesseract 4.1.1): escaneo limpio y borroso leen el DUA de ejemplo (todos los identificadores quedan como dudosos); escaneo ruidoso y girado no produce DUA; hoja en blanco queda "sin texto"; sin tesseract queda "OCR no disponible". Sin probar: escaneos reales, manuscritos, sellos, tablas, otras versiones de tesseract, tiempo bajo carga. Con una sola muestra por caso no hay tasa de acierto.
+
+## Envíos incrementales (cambia el almacén de envíos)
+Con una base `.db` (`APP_DATA_PATH=...db`) los envíos viven en tablas por registro (`server/shipments-db.mjs`), no dentro del documento del espacio. La interfaz pide páginas (`GET /api/shipments/list|stats|pending|search|item`) y escribe altas, confirmaciones, descartes y propuestas con `POST /api/shipments/op` (CSRF y origen obligatorios; el rol lector recibe 403). Cada escritura toma el bloqueo de escritura de SQLite, carga solo los envíos abiertos o referenciados por el correo y guarda solo las filas cambiadas. `APP_SHIPMENTS_STORE=document` conserva el modo antiguo.
+**Migración:** en el primer arranque con datos antiguos se importan los envíos, se guarda una copia íntegra en `<base>.envios-anterior.json` y se quitan del documento del espacio. Conserva esa copia hasta validar la migración en destino.
+**Tamaño de petición:** `APP_MAX_BODY_MB` (por defecto 2).
+
+### Medido aquí (datos sintéticos, 30 sesiones en bucle cerrado sin pausa, generador y servidor en las mismas 2 CPU)
+| Histórico | Peticiones/s | p50 | p99 | Errores | RSS | Base |
+|---|---|---|---|---|---|---|
+| 2200 envíos × 5 correos (volumen sintético de ~22 días) | ~700 | ~35 ms | ~60 ms | 0 | ~142 MB | 26 MB |
+| 2200 × 15 correos | ~710 | ~35 ms | ~65 ms | 0 | ~139 MB | 52 MB |
+| 10000 × 5 (~100 días) | ~366 | ~60 ms | ~105 ms | 0 | ~134 MB | 102 MB |
+Recepción de correo (un proceso, `scripts/loadingest.mjs`): 2200×5 p50/p95/p99 0,8/2,7/3,8 ms; 10000×5 0,9/3,2/4,1 ms.
+**No demuestra:** horizonte de 12 meses (no medido), Microsoft Graph real, adjuntos en el bucle, navegador real, hardware del destino. Las escrituras se serializan en el único escritor de SQLite. El **espacio compartido (casos)** sigue siendo un documento completo y devuelve 409 ante conflicto (en la mezcla, ~50 % de sus escrituras simultáneas).
+Repetir: `node scripts/loadhttp.mjs --shipments 2200 --mails 5 --seconds 15` y `node scripts/loadingest.mjs --shipments 2200 --mails 5 --n 400`.
