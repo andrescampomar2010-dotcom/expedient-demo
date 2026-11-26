@@ -6,6 +6,10 @@ Demo local de preparación, revisión y asignación de expedientes documentales.
 
 Instala dependencias con `npm ci`, ejecuta `npm run demo:simulated` y abre `http://localhost:4875`. Al arrancar se recibe un correo sintético y se prepara un expediente automáticamente: hilo, adjunto XLSX, conciliación, regla de asignación, candidatos oficiales, incidencias y pasos. Abre Automatización para probar repetición, composición desconocida, descuadres y falta de packing. Ver [preparación y fuentes](docs/PREPARATION.md). La primera revisión sigue siendo humana antes de cualquier entrega.
 
+## Envíos y ficha viva
+
+Pantalla «Envíos»: cada correo se suma a la ficha de su envío, con resumen de última gestión y última información, rechazos cruzados por DUA y correcciones sin perder historial. Ver [docs/ENVIOS.md](docs/ENVIOS.md) y [qué falta para producción](docs/PRODUCCION.md).
+
 ## Conectar tu cuenta (solo lectura)
 
 Ver [docs/CONECTAR.md](docs/CONECTAR.md). Microsoft exige que registres tu propia aplicación (paso externo, no hay conector listo). Después, `npm start` y http://localhost:4875/setup guardan tu configuración solo en tu equipo. No probado aún con cuenta real.
