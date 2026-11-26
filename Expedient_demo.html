@@ -25,7 +25,7 @@ function sample(){const s=blank();s.history=[{description:'Lápiz de grafito con
 return {VERSION,uid,blank,newCase,audit,invalidate,totals,issues,propose,review,assign,csv,exportCase,parseCsv,sample};})();
 function integrationUI({host,esc,initialPreview,onImport,onKnowledge,onAnalysis}){
  let status=null,results={messages:[],files:[]},analysis='',preview=initialPreview||'';
- const hosted=location.protocol==='http:'&&['localhost','127.0.0.1'].includes(location.hostname);
+ const hosted=(location.protocol==='https:'||(location.protocol==='http:'&&['localhost','127.0.0.1'].includes(location.hostname)));
  async function api(path,options){if(!hosted)throw Error('Abre el proyecto con npm start en localhost. El HTML autónomo no hace peticiones.');const r=await fetch(path,{...options,credentials:'same-origin',redirect:'error'});const j=await r.json();if(!r.ok)throw Error(j.error||'Error del servidor');return j;}
  function render(){host.innerHTML=`<h2>Conexiones opcionales</h2><div class="notice">${!hosted?'HTML autónomo: red bloqueada. Para probar integración usa el servidor local.':status?.mock?'SIMULACIÓN: datos inventados, sin Microsoft ni Claude real.':'Servidor local. Consultas manuales y receptor automático opcional, desactivado por defecto. Nunca envía correo.'}</div><p>El estado solo se obtiene al comprobar. ${(location.protocol==='http:'&&['localhost','127.0.0.1'].includes(location.hostname))?'Para conectar tus cuentas: <a href="/setup">pantalla de configuración local</a> (guarda .env fuera de Git).':'Esta versión offline no se conecta a cuentas: usa la app Node (npm start) para eso.'}</p><button data-int="status">Comprobar servidor local</button>${status?`<p>Microsoft: ${status.mock?'simulado':status.graphConfigured?(status.authenticated?'sesión iniciada':'requiere sesión'):'desactivado'}. Claude: ${status.claude.ready?'disponible: '+esc(status.claude.model):'desactivado'}.</p><p>Receptor automático: ${status.receiver?.enabled?esc(status.receiver.state)+' · intervalo '+esc(status.receiver.intervalMinutes)+' min':'desactivado'}. Configuración y límites en docs/RECEIVER.md. Para ver entradas nuevas, recarga el espacio antes de editar.</p>${status.graphConfigured&&!status.authenticated?'<a href="/auth/login">Iniciar sesión Microsoft autorizada</a>':''}<div class="actions"><button data-int="messages">Consultar 10 correos</button><button data-int="files">Consultar 20 archivos raíz</button></div>`:''}<h3>Correo, selección manual</h3>${results.messages.map((m,i)=>`<section class="line"><h4>${esc(m.subject)}</h4><p>${esc(m.bodyPreview)}</p><small>${esc(m.receivedDateTime)} · ${esc(m.id)}</small><p>Vista previa, no correo completo ni adjuntos.</p><button data-int="import" data-index="${i}">Crear expediente desde esta vista previa</button></section>`).join('')||'<p>Sin consulta.</p>'}<h3>OneDrive, metadatos</h3>${results.files.map((f,i)=>`<section class="line"><strong>${esc(f.name)}</strong><p>${esc(f.lastModifiedDateTime)} · ${esc(f.id)}</p><p>No se descarga al listar. Solo TXT pequeños, seleccionados manualmente.</p>${f.name?.toLowerCase().endsWith('.txt')?`<button data-int="knowledge-import" data-index="${i}">Leer TXT y añadir a conocimiento</button>`:''}</section>`).join('')||'<p>Sin consulta.</p>'}<h3>Análisis Claude opcional</h3><p>Solo se transmite el texto que ves debajo, nunca todo el expediente en segundo plano. No modifica HS ni confirma revisión. El resultado queda como propuesta sin aplicar. Una API puede generar coste: máximo 12.000 caracteres y el límite de salida del servidor; no es un límite monetario diario.</p><label>Texto exacto para revisar<textarea id="analysis-input" maxlength="12000">${esc(preview)}</textarea></label><label class="check"><input id="analysis-consent" type="checkbox">Autorizo esta transmisión y su posible coste, o confirmo la prueba sintética si está en simulación.</label><button data-int="analyze">Analizar texto revisado</button>${analysis?`<section class="line"><h4>Propuesta, revisión humana pendiente</h4><pre style="white-space:pre-wrap">${esc(analysis)}</pre></section>`:''}<p id="integration-message" role="status"></p><h3>Pendiente</h3><p>Motores específicos de proveedores, formatos PDF/Office, indexación masiva, búsqueda semántica, autenticación/roles de producción y envío externo de avisos. No están terminados por mostrar conexiones. No hay permisos de escritura o envío.</p>`;}
  host.addEventListener('input',capture);function capture(e){if(e.target.id==='analysis-input')preview=e.target.value;}
@@ -68,8 +68,9 @@ const num = s => Number(String(s).replace(/\./g, '').replace(',', '.'));
 const domainOf = a => String(a || '').toLowerCase().split('@').pop().trim();
 const ts = d => Date.parse(d) || 0;
 
+const ATT_LABEL = { leido: 'leído', sin_texto: 'sin texto: no leído, posible escaneo', demasiado_grande: 'demasiado grande: no leído', no_soportado: 'contenido no leído', error: 'no se pudo leer' };
 function extract(mail) {
-  const text = `${mail.subject || ''}\n${mail.body || ''}\n${(mail.attachments || []).join(' ')}`;
+  const text = `${mail.subject || ''}\n${mail.body || ''}\n${(mail.attachments || []).join(' ')}\n${String(mail.attachmentText || '').slice(0, 60000)}`;
   const duas = [...new Set((text.match(/\b\d{2}[A-Za-z]{2}\d{10,16}[A-Za-z]?\b/g) || []).map(x => x.toUpperCase()))];
   const exps = [...new Set([...text.matchAll(/\bEXP[-\s]?(\d{4})[-\s]?(\d{1,3})\b/gi)].map(m => `EXP-${m[1]}-${m[2].padStart(2, '0')}`))];
   const refs = [...new Set((text.match(/\bTR-\d{3,5}\b/gi) || []).map(x => x.toUpperCase()))];
@@ -152,7 +153,7 @@ function makeEvent(mail, x, shipment) {
     id: 'ev-' + mail.id, date: mail.date, side, kind, rejection: kind === 'rechazo',
     text: side === 'info' && kind === 'info' ? mail.subject : label,
     mailId: mail.id,
-    source: `Correo ${fmt(mail.date)} de ${mail.from}: «${mail.subject}»`
+    source: `Correo ${fmt(mail.date)} de ${mail.from}: «${mail.subject}»` + (mail.attachmentsInfo?.length ? ' · Adjuntos: ' + mail.attachmentsInfo.map(a => `${a.name} (${ATT_LABEL[a.status] || a.status})`).join(', ') : '')
   };
 }
 
@@ -280,7 +281,7 @@ const HAY = new WeakMap();
 const clean = t => norm(t).replace(/[^a-z0-9ñ ]/g, ' ');
 function hayOf(s, m) {
   let mh = HAY.get(m);
-  if (mh === undefined) { mh = clean([m.subject, m.body, m.from, (m.attachments || []).join(' ')].join(' ')); HAY.set(m, mh); }
+  if (mh === undefined) { mh = clean([m.subject, m.body, m.from, (m.attachments || []).join(' '), m.attachmentText || ''].join(' ')); HAY.set(m, mh); }
   let sh = HAY.get(s); const key = [s.id, s.exp, s.dua, s.client, s.provider].join(' ');
   if (!sh || sh.key !== key) { sh = { key, h: clean(key) }; HAY.set(s, sh); }
   return sh.h + ' ' + mh;
@@ -358,7 +359,7 @@ const DEMO_INBOX = [
   { id: 'n6', threadId: 'th-x4', from: 'curso@formacion.example', subject: 'Curso de verano', date: '2026-11-26T17:15:00+01:00', body: 'Descubre nuestros cursos.' }
 ];
 
-return {ensure,blankShipments,demoState,DEMO_INBOX,ingestMail,confirmPending,addShipment,attachProposal,summarize,search,stats,fmt};})();
+return {ensure,blankShipments,demoState,DEMO_INBOX,ingestMail,confirmPending,addShipment,attachProposal,summarize,search,stats,fmt,ATT_LABEL};})();
 
 // Pantalla «Envíos»: ficha viva por envío, pendientes de relacionar, búsqueda y alta manual.
 function shipmentsUI({ host, getState, save, esc, msg, demo, ai }) {
@@ -402,7 +403,7 @@ ${tag(s.status)}${m.rejectionOpen ? tag('Rechazo sin gestión posterior', 'warn'
 
   function mailBlock(m, mark) {
     const ev = (S.ensure(st()).items.find(s => s.id === m.shipmentId)?.events || []).find(e => e.mailId === m.id);
-    return `<div class="line ${mark ? 'hit' : ''}"><small>${esc(S.fmt(m.date))} · ${esc(m.from)} · ${m.direction === 'out' ? 'enviado por nosotros' : 'recibido'}</small><br><strong>${esc(m.subject)}</strong><p>${esc(m.body)}</p>${(m.attachments || []).map(a => tag('Adjunto: ' + a)).join('')}${ev?.corrects ? tag('Corrige un dato anterior (' + ev.corrects + ')', 'warn') : ''}${m.how ? `<p><small>${esc(m.how)}</small></p>` : ''}</div>`;
+    return `<div class="line ${mark ? 'hit' : ''}"><small>${esc(S.fmt(m.date))} · ${esc(m.from)} · ${m.direction === 'out' ? 'enviado por nosotros' : 'recibido'}</small><br><strong>${esc(m.subject)}</strong><p>${esc(m.body)}</p>${(m.attachments || []).map(a => { const i = (m.attachmentsInfo || []).find(x => x.name === a); return tag('Adjunto: ' + a + (i ? ' · ' + (S.ATT_LABEL[i.status] || i.status) : ''), i && i.status !== 'leido' && i.status !== 'no_soportado' ? 'warn' : undefined); }).join('')}${ev?.corrects ? tag('Corrige un dato anterior (' + ev.corrects + ')', 'warn') : ''}${m.how ? `<p><small>${esc(m.how)}</small></p>` : ''}</div>`;
   }
 
   function detail(id, hits = []) {
@@ -474,11 +475,11 @@ ${a?.shipmentId ? `<button class="primary" data-sh="confirm" data-via="ai" data-
 
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let disposeIntegration;
-const served=location.protocol==='http:'&&['localhost','127.0.0.1'].includes(location.hostname);let liveMode=false;if(served)fetch('/api/status',{credentials:'same-origin'}).then(r=>r.json()).then(t=>{liveMode=!!t.graphConfigured&&!t.mock;aiReady=!!t.aiProposer?.ready;if(liveMode)render();}).catch(()=>{});
+const served=(location.protocol==='https:'||(location.protocol==='http:'&&['localhost','127.0.0.1'].includes(location.hostname)));let liveMode=false;if(served)fetch('/api/status',{credentials:'same-origin'}).then(r=>r.json()).then(t=>{liveMode=!!t.graphConfigured&&!t.mock;aiReady=!!t.aiProposer?.ready;if(liveMode)render();}).catch(()=>{});
 let aiReady=false;
 async function askAi(mail,shipments){const st=await(await fetch('/api/status',{credentials:'same-origin'})).json();const r=await fetch('/api/shipments/propose',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','x-csrf-token':st.csrf},body:JSON.stringify({confirm:true,mail,shipments})});return await r.json();}
 let workspaceRevision=0,csrf='',actor='Coordinador',saving=false;
-async function workspace(action){if(!served)return;const out=$('#workspace-status');try{if(action==='save'){if(saving)return;saving=true;const r=await fetch('/api/workspace',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify({revision:workspaceRevision,state})});const j=await r.json();if(!r.ok)throw Error(j.error);workspaceRevision=j.revision;}else{const st=await(await fetch('/api/status',{credentials:'same-origin'})).json();csrf=st.csrf;const r=await fetch('/api/workspace',{credentials:'same-origin'});if(!r.ok)throw Error('No se pudo cargar el espacio');const j=await r.json();state=j.state;workspaceRevision=j.revision;selected=state.cases[0]?.id||'';render();}out.textContent='Servidor local: revisión '+workspaceRevision+'. Cambios compartidos solo al guardar. No hay autenticación de producción.';}catch(e){out.textContent=e.message==='REVISION_CONFLICT_RELOAD_BEFORE_EDITING'?'Otra sesión guardó cambios. Exporta tus cambios locales y recarga, no se ha sobrescrito el servidor.':e.message;}finally{saving=false;}}
+async function workspace(action){if(!served)return;const out=$('#workspace-status');try{if(action==='save'){if(saving)return;saving=true;const r=await fetch('/api/workspace',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify({revision:workspaceRevision,state})});const j=await r.json();if(!r.ok)throw Error(j.error);workspaceRevision=j.revision;}else{const st=await(await fetch('/api/status',{credentials:'same-origin'})).json();csrf=st.csrf;const r=await fetch('/api/workspace',{credentials:'same-origin'});if(!r.ok)throw Error('No se pudo cargar el espacio');const j=await r.json();state=j.state;workspaceRevision=j.revision;selected=state.cases[0]?.id||'';render();}out.textContent='Servidor local: revisión '+workspaceRevision+'. Cambios compartidos solo al guardar.';}catch(e){out.textContent=e.message==='REVISION_CONFLICT_RELOAD_BEFORE_EDITING'?'Otra sesión guardó cambios. Exporta tus cambios locales y recarga, no se ha sobrescrito el servidor.':e.message;}finally{saving=false;}}
 let state=C.blank(),selected='',view='cases';
 try{const x=JSON.parse(localStorage.getItem('expedient-demo-v1'));if(x?.version===C.VERSION)state=x;}catch{}
 function save(){localStorage.setItem('expedient-demo-v1',JSON.stringify(state));}
