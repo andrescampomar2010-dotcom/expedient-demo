@@ -73,3 +73,13 @@ Con una base `.db` (`APP_DATA_PATH=...db`) los envíos viven en tablas por regis
 Recepción de correo (un proceso, `scripts/loadingest.mjs`): 2200×5 p50/p95/p99 0,8/2,7/3,8 ms; 10000×5 0,9/3,2/4,1 ms.
 **No demuestra:** horizonte de 12 meses (no medido), Microsoft Graph real, adjuntos en el bucle, navegador real, hardware del destino. Las escrituras se serializan en el único escritor de SQLite. El **espacio compartido (casos)** sigue siendo un documento completo y devuelve 409 ante conflicto (en la mezcla, ~50 % de sus escrituras simultáneas).
 Repetir: `node scripts/loadhttp.mjs --shipments 2200 --mails 5 --seconds 15` y `node scripts/loadingest.mjs --shipments 2200 --mails 5 --n 400`.
+
+## Instalación desde cero sin Docker: secuencia validada
+Validada el 26/11/2026 en una copia nueva (`git clone`, `npm ci --omit=dev`, Linux, Node 22+), sin systemd ni proxy:
+1. `ADDUSER_PASSWORD=<clave de 12+ caracteres> APP_USERS_PATH=/ruta/users.json node scripts/adduser.mjs ana admin`
+2. `PORT=4876 APP_AUTH=local APP_MODE=production APP_USERS_PATH=/ruta/users.json APP_DATA_PATH=/ruta/x.db node server/server.mjs`
+3. `curl localhost:4876/api/health` devuelve `{"ok":true,"auth":"local"}`.
+4. Login: `POST /api/login` con cabecera `origin` y `{"name","password"}` (200). La sesión se crea con `GET /api/status` (devuelve el token CSRF); sin ella la API responde `LOCAL_SESSION_REQUIRED`.
+5. `GET /api/shipments/stats` y alta con `POST /api/shipments/op` (cabeceras `origin` y `x-csrf-token`).
+6. Parar la app, `node scripts/backup.mjs backup /ruta/x.db /ruta/bk`, borrar la base, `node scripts/backup.mjs restore <copia>.db /ruta/x.db`, volver a arrancar y comprobar `/api/health`.
+`npm test` en la copia nueva: 100 pruebas, 97 pasan y 3 (OCR) se omiten sin `TESSDATA_PREFIX`; 0 fallos. Con el modelo de OCR instalado pasan las 100 (probado en el entorno de desarrollo). Sin validar aquí: Docker, systemd, nginx, Graph.
