@@ -1,3 +1,4 @@
+process.env.OCR_ENABLED='false';
 import test from 'node:test';import assert from 'node:assert/strict';
 import {readAttachment} from '../server/attachments.mjs';import {pdf} from './fixtures/mkpdf.mjs';
 test('PDF digital: se lee el texto y aparece el DUA',async()=>{
