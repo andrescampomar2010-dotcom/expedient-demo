@@ -52,9 +52,9 @@ export function classify(mail) {
   if (/subsan|corregid[oa] y reenvi|reenviamos (la )?(declaracion|dua)/.test(t)) return out ? 'subsanacion' : 'info';
   if (/levante|autorizad[oa] (la )?(salida|declaracion)/.test(t)) return 'levante';
   if (/dua presentad|declaracion presentad|presentamos (el|la) (dua|declaracion)/.test(t)) return out ? 'dua_presentado' : 'info';
+  if (/entregad[oa] en destino|(ha sido|fue|queda) entregad[oa]|entregad[oa],? gracias/.test(norm(mail.body || ''))) return 'entrega';
   if (/correccion|corrige|cambia el camion|nueva matricula/.test(t)) return 'correccion';
   if (/matricula|camion asignado|remolque/.test(t)) return out ? 'pedido_matriculas' : 'matriculas';
-  if (/entregad[oa]/.test(t)) return 'entrega';
   if (/adjunt|documentacion|documento/.test(t)) return out ? 'documentacion' : 'info';
   return out ? 'gestion' : 'info';
 }
@@ -62,23 +62,49 @@ export function classify(mail) {
 function openShipments(S) { return S.items.filter(s => s.status !== 'Entregado'); }
 const byNum = (a, b) => (a != null && b != null && a === b);
 
+// Índices en memoria (se reconstruyen si cambia el nº de envíos o correos). Evitan recorrer todo el histórico por cada correo.
+const IDX = new WeakMap();
+function indexOf(S) {
+  let c = IDX.get(S);
+  const put = (m, k, s) => { if (k == null || k === '') return; const a = m.get(k); if (a) a.push(s); else m.set(k, [s]); };
+  if (c && c.itemsRef === S.items && c.mailsRef === S.mails && S.items.length > c.ni) {
+    for (; c.ni < S.items.length; c.ni++) { const s = S.items[c.ni]; c.id.set(s.id, s); put(c.dua, s.dua, s); put(c.exp, s.exp, s); }
+  }
+  if (!c || c.ni !== S.items.length || c.mailsRef !== S.mails || c.itemsRef !== S.items) {
+    c = { ni: S.items.length, nm: 0, mailsRef: S.mails, itemsRef: S.items, id: new Map(), dua: new Map(), exp: new Map(), thread: new Map(), mailId: new Map() };
+    for (const s of S.items) { c.id.set(s.id, s); put(c.dua, s.dua, s); put(c.exp, s.exp, s); }
+    IDX.set(S, c);
+  }
+  for (; c.nm < S.mails.length; c.nm++) indexMail(c, S.mails[c.nm]);
+  return c;
+}
+function indexMail(c, m) {
+  c.mailId.set(m.id, m);
+  if (m.threadId && m.shipmentId) { let t = c.thread.get(m.threadId); if (!t) c.thread.set(m.threadId, t = new Set()); t.add(m.shipmentId); }
+}
 function candidatesFor(S, x, mail) {
   const found = new Map();
   const add = (s, how, sure) => { const p = found.get(s.id); if (!p) found.set(s.id, { id: s.id, hows: [how], sure }); else { p.hows.push(how); p.sure = p.sure || sure; } };
-  for (const s of S.items) {
+  const ix = indexOf(S);
+  const hit = new Set();
+  for (const d of x.duas) for (const s of ix.dua.get(d) || []) hit.add(s);
+  for (const e of x.exps) for (const s of ix.exp.get(e) || []) hit.add(s);
+  for (const r of x.refs) { const s = ix.id.get(r); if (s) hit.add(s); }
+  const thr = mail.threadId ? ix.thread.get(mail.threadId) : null;
+  if (thr) for (const id of thr) { const s = ix.id.get(id); if (s) hit.add(s); }
+  for (const s of S.items.length > 0 ? [...hit] : []) {
     if (x.duas.includes(s.dua)) add(s, `número de DUA ${s.dua}`, true);
     if (x.exps.includes(s.exp)) add(s, `expediente ${s.exp}`, true);
     if (x.refs.includes(s.id)) add(s, `referencia ${s.id}`, true);
-    const prev = mail.threadId && S.mails.find(m => m.threadId === mail.threadId && m.shipmentId === s.id);
-    if (prev) add(s, 'misma conversación de correo', true);
+    if (thr && thr.has(s.id)) add(s, 'misma conversación de correo', true);
   }
   if (found.size) return { sure: true, list: [...found.values()] };
   const weak = new Map();
   const addW = (s, how) => { const p = weak.get(s.id); if (!p) weak.set(s.id, { id: s.id, hows: [how], sure: false }); else p.hows.push(how); };
   const open = openShipments(S);
   if (x.bultos != null && x.kg != null) for (const s of open) if (byNum(x.bultos, s.bultos) && byNum(x.kg, s.kg)) addW(s, `bultos (${x.bultos}) y kilos (${x.kg}) coinciden`);
-  const dom = domainOf(mail.from);
-  if (dom) for (const s of open) if (dom === s.clientDomain || dom === s.providerDomain) addW(s, `remitente del dominio ${dom}`);
+  const doms = mail.direction === 'out' ? [...new Set((mail.to || []).map(domainOf))] : [domainOf(mail.from)];
+  for (const dom of doms) if (dom) for (const s of open) if (dom === s.clientDomain || dom === s.providerDomain) addW(s, `${mail.direction === 'out' ? 'destinatario' : 'remitente'} del dominio ${dom}`);
   for (const s of open) { const pl = [...x.plates, ...x.trailers]; if (pl.length && (s.plates || []).some(p => pl.includes(p.value))) addW(s, 'matrícula ya vista en este envío'); }
   return { sure: false, list: [...weak.values()] };
 }
@@ -97,6 +123,7 @@ function makeEvent(mail, x, shipment) {
 
 function applyToShipment(S, mail, x, shipment, how, sure) {
   mail.shipmentId = shipment.id; mail.how = how; mail.sure = sure;
+  { const c = IDX.get(S); if (c) indexMail(c, mail); }
   const ev = makeEvent(mail, x, shipment);
   if (!sure) { ev.text += ' (relación confirmada por ti)'; }
   // Datos nuevos: nunca se borran los anteriores; si contradicen, se marca corrección.
@@ -125,7 +152,7 @@ export function ingestMail(state, mailIn) {
   const S = ensure(state);
   const mail = { attachments: [], ...mailIn };
   if (!mail.id || !mail.date) throw Error('MAIL_NEEDS_ID_AND_DATE');
-  if (S.mails.some(m => m.id === mail.id)) return { status: 'duplicate', why: 'Este correo ya estaba registrado.' };
+  if (indexOf(S).mailId.has(mail.id)) return { status: 'duplicate', why: 'Este correo ya estaba registrado.' };
   mail.direction ||= (S.ownDomains || []).includes(domainOf(mail.from)) ? 'out' : 'in';
   const x = extract(mail);
   mail.body = String(mail.body || '').slice(0, 20000);
@@ -155,7 +182,7 @@ export function ingestMail(state, mailIn) {
   S.pending.push(p); return { status: 'pending', ...p };
 }
 
-export function confirmPending(state, mailId, shipmentId) {
+export function confirmPending(state, mailId, shipmentId, via = '') {
   const S = ensure(state);
   const i = S.pending.findIndex(p => p.mailId === mailId);
   if (i < 0) throw Error('NOT_PENDING');
@@ -165,24 +192,39 @@ export function confirmPending(state, mailId, shipmentId) {
   if (!s) throw Error('UNKNOWN_SHIPMENT');
   const x = extract(mail);
   S.pending.splice(i, 1);
-  applyToShipment(S, mail, x, s, 'Confirmado por ti.', false);
+  applyToShipment(S, mail, x, s, via === 'ai' ? 'Confirmado por ti a partir de una sugerencia de IA (no verificada).' : 'Confirmado por ti.', false);
   return { shipmentId };
+}
+
+// La IA solo PROPONE. Se valida contra los envíos abiertos; nunca asigna ni cambia el estado del envío.
+export function attachProposal(state, mailId, prop) {
+  const S = ensure(state);
+  const p = S.pending.find(p => p.mailId === mailId);
+  if (!p || !prop || prop.error) return false;
+  const ids = S.items.filter(s => s.status !== 'Entregado').map(s => s.id);
+  const id = prop.shipmentId === null ? null : String(prop.shipmentId);
+  if (id !== null && !ids.includes(id)) return false;
+  p.ai = { shipmentId: id, confidence: ['alta', 'media', 'baja'].includes(prop.confidence) ? prop.confidence : 'baja', reason: String(prop.reason || '').slice(0, 300), model: String(prop.model || '').slice(0, 80), simulated: !!prop.simulated, outsideRules: id !== null && !p.candidates.includes(id), unverified: true };
+  return true;
 }
 
 export function addShipment(state, d) {
   const S = ensure(state);
   const id = String(d.id || '').trim();
   if (!id) throw Error('SHIPMENT_ID_REQUIRED');
-  if (S.items.some(s => s.id === id)) throw Error('SHIPMENT_EXISTS');
+  if (indexOf(S).id.has(id)) throw Error('SHIPMENT_EXISTS');
   const s = { id, route: d.route || '', cargo: d.cargo || '', client: d.client || '', provider: d.provider || '', clientDomain: String(d.clientDomain || '').toLowerCase(), providerDomain: String(d.providerDomain || '').toLowerCase(),
     exp: d.exp ? extract({ subject: d.exp }).exps[0] || d.exp : '', dua: String(d.dua || '').toUpperCase(), bultos: d.bultos != null && d.bultos !== '' ? Number(d.bultos) : null, kg: d.kg != null && d.kg !== '' ? Number(d.kg) : null,
     status: 'Abierto', events: [], mailIds: [], plates: [], created: d.created || new Date().toISOString() };
   S.items.push(s);
   // Reevalúa correos pendientes que ahora puedan ser identificables con certeza.
   for (const p of [...S.pending]) {
-    const m = S.mails.find(m => m.id === p.mailId), x = extract(m), cand = candidatesFor(S, x, m);
+    const m = indexOf(S).mailId.get(p.mailId); if (!m) continue;
+    const txt = (m.subject + ' ' + m.body).toUpperCase();
+    if (!((s.dua && txt.includes(s.dua)) || (s.exp && txt.includes(String(s.exp).toUpperCase())) || txt.includes(s.id.toUpperCase()))) continue;
+    const x = extract(m), cand = candidatesFor(S, x, m);
     const sure = cand.list.filter(l => l.sure);
-    if (sure.length === 1) { S.pending = S.pending.filter(q => q !== p); applyToShipment(S, m, x, S.items.find(i => i.id === sure[0].id), 'Identificado por ' + sure[0].hows.join(' y ') + ' al crear el envío.', true); }
+    if (sure.length === 1) { S.pending = S.pending.filter(q => q !== p); applyToShipment(S, m, x, indexOf(S).id.get(sure[0].id), 'Identificado por ' + sure[0].hows.join(' y ') + ' al crear el envío.', true); }
   }
   return s;
 }
@@ -199,6 +241,15 @@ export function summarize(s) {
 export function fmt(d) { try { return new Date(d).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', ''); } catch { return d; } }
 
 // Búsqueda: coincidencia exacta (DUA, expediente, matrícula, referencia) y por palabras.
+const HAY = new WeakMap();
+const clean = t => norm(t).replace(/[^a-z0-9ñ ]/g, ' ');
+function hayOf(s, m) {
+  let mh = HAY.get(m);
+  if (mh === undefined) { mh = clean([m.subject, m.body, m.from, (m.attachments || []).join(' ')].join(' ')); HAY.set(m, mh); }
+  let sh = HAY.get(s); const key = [s.id, s.exp, s.dua, s.client, s.provider].join(' ');
+  if (!sh || sh.key !== key) { sh = { key, h: clean(key) }; HAY.set(s, sh); }
+  return sh.h + ' ' + mh;
+}
 export function search(state, q) {
   const S = ensure(state);
   const raw = String(q || '').trim();
@@ -214,8 +265,9 @@ export function search(state, q) {
     const hits = [];
     const idQuery = x.duas.length || x.exps.length || x.refs.length;
     for (const id of idQuery ? [] : s.mailIds) {
-      const m = S.mails.find(m => m.id === id);
-      const hay = norm([s.id, s.exp, s.dua, s.client, s.provider, m.subject, m.body, m.from, (m.attachments || []).join(' ')].join(' ')).replace(/[^a-z0-9ñ ]/g, ' ');
+      const m = indexOf(S).mailId.get(id);
+      if (!m) continue;
+      const hay = hayOf(s, m);
       const hayCompact = hay.replace(/ /g, '');
       const plates = x.plates.concat(x.trailers);
       const okPlates = plates.every(p => hayCompact.includes(norm(p)));
