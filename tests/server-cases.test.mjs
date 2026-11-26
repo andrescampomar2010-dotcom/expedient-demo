@@ -25,8 +25,14 @@ test('HTTP: dos personas guardan expedientes distintos sin 409; el mismo expedie
   const we=await A.get(),wf=await B.get();we.state.notices.push({id:'n1',text:'aviso'});assert.equal((await A.save(we.revision,we.state)).status,200);
   wf.state.cases.find(c=>c.id==='Y').n=42;assert.equal((await B.save(wf.revision,wf.state)).status,200,'cambio de expediente con la parte común intacta: sin 409');
   const g=await A.get();assert.equal(g.state.notices.length,1,'el aviso de la otra persona se conserva');assert.equal(g.state.cases.find(c=>c.id==='Y').n,42);
-  // pero si cambia la parte común desde una base vieja, sí se rechaza
-  const wg=await A.get(),wh=await B.get();wg.state.notices.push({id:'n2'});assert.equal((await A.save(wg.revision,wg.state)).status,200);wh.state.notices.push({id:'n3'});
+  // avisos y borradores: por registro. Dos personas añaden avisos distintos sin 409; el mismo aviso desde base vieja sí
+  const w1=await A.get(),w2=await B.get();w1.state.notices.push({id:'n2',text:'a'});w1.state.drafts.push({id:'d1',text:'x'});w2.state.notices.push({id:'n3',text:'b'});
+  assert.equal((await A.save(w1.revision,w1.state)).status,200);assert.equal((await B.save(w2.revision,w2.state)).status,200,'avisos distintos: sin conflicto');
+  const lst=(await A.get()).state;assert.deepEqual(lst.notices.map(n=>n.id).sort(),['n1','n2','n3']);assert.equal(lst.drafts.length,1);
+  const w3=await A.get(),w4=await B.get();w3.state.notices.find(n=>n.id==='n1').read=true;await A.save(w3.revision,w3.state);
+  w4.state.notices.find(n=>n.id==='n1').text='editado';const rc=await B.save(w4.revision,w4.state);assert.equal(rc.status,409);assert.equal(rc.body.error,'RECORD_CONFLICT_RELOAD_BEFORE_EDITING');assert.equal(rc.body.coll,'notices');
+  // la parte común restante (conocimiento, historial): sigue con revisión
+  const wg=await A.get(),wh=await B.get();wg.state.history.push({id:'h1'});assert.equal((await A.save(wg.revision,wg.state)).status,200);wh.state.history.push({id:'h2'});
   const bad2=await B.save(wh.revision,wh.state);assert.equal(bad2.status,409);assert.equal(bad2.body.error,'REVISION_CONFLICT_RELOAD_BEFORE_EDITING');
  }finally{srv.kill()}
 });
