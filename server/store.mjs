@@ -20,6 +20,7 @@ async function openSqliteWorkspace(path){
  const db=open(path),K='workspace';
  const maxCases=Number(process.env.APP_MAX_CASES||50000),maxKnow=Number(process.env.APP_MAX_KNOWLEDGE||100000);
  return{
+  readJson(){const r=db.readRaw(K);return r?`{"revision":${r.ver},"state":${r.v.slice(9,-1)}}`:null},
   read(){const r=db.read(K);return r.ver?{revision:r.ver,state:r.value.state}:{revision:0,state:blank()}},
   async write(expected,state){
    if(!state||state.version!=='0.1.0'||!['cases','notices','drafts','knowledge','history'].every(k=>Array.isArray(state[k])))throw Error('INVALID_STATE');
