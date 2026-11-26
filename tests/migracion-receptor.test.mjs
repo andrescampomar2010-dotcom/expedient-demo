@@ -1,0 +1,21 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {mkdtempSync,existsSync,readFileSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';import {spawn,spawnSync} from 'node:child_process';
+import {openStore as openKv} from '../server/store-sqlite.mjs';import {openShipmentsDb} from '../server/shipments-db.mjs';import {blank} from '../web/core.mjs';
+test('migración desde un espacio antiguo: estado del receptor, seen, avisos, borradores y expedientes pasan a tablas con copias; segundo arranque no repite',async()=>{
+ const d=mkdtempSync(join(tmpdir(),'mr-')),db=join(d,'x.db'),users=join(d,'u.json');
+ const st=blank();st.receiver={scope:'s|f|2026',folder:'f',baseline:true,cursor:'https://graph.microsoft.com/v1.0/me/mailFolders/f/messages/delta?token=9',seen:{a:'v1',b:'v2'},lastRun:'',lastResult:''};
+ st.receiverSent={scope:'s|g|2026',folder:'g',baseline:true,cursor:'c2',seen:{z:'v'}};
+ st.cases=[{id:'K2',n:1},{id:'K1',n:1}];st.notices=[{id:'n1',caseId:'K1',text:'a'},{id:'n2',caseId:'K2',text:'b'}];st.drafts=[{id:'d1',caseId:'K1'}];
+ const kv=openKv(db);kv.write('workspace',{state:st},0);kv.close();
+ spawnSync(process.execPath,['scripts/adduser.mjs','ana','admin'],{env:{...process.env,APP_USERS_PATH:users,ADDUSER_PASSWORD:'una-clave-larga-1'}});
+ const PORT=5100+Math.floor(Math.random()*400);
+ const run=async()=>{const srv=spawn(process.execPath,['server/server.mjs'],{env:{...process.env,PORT:String(PORT),APP_AUTH:'local',APP_MODE:'production',APP_USERS_PATH:users,APP_DATA_PATH:db},stdio:'ignore'});
+  for(let i=0;i<60;i++){try{if((await fetch('http://localhost:'+PORT+'/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}srv.kill();await new Promise(r=>srv.on('exit',r))};
+ await run();
+ let sdb=openShipmentsDb(db,{});assert.equal(sdb.getRec('receiver').cursor.endsWith('token=9'),true);assert.equal(sdb.seenGet('receiver','a'),'v1');assert.equal(sdb.seenCount('receiver'),2);assert.equal(sdb.seenCount('receiverSent'),1);sdb.close();
+ for(const f of ['.receptor-receiver-anterior.json','.receptor-receiverSent-anterior.json','.expedientes-anterior.json','.avisos-anterior.json','.borradores-anterior.json'])assert.ok(existsSync(db+f),f);
+ assert.equal(JSON.parse(readFileSync(db+'.receptor-receiver-anterior.json','utf8')).seen.b,'v2');
+ const k2=openKv(db);const doc=k2.read('workspace').value.state;k2.close();assert.equal(doc.receiver,undefined);assert.deepEqual([doc.cases,doc.notices,doc.drafts],[[],[],[]]);
+ const {openStore}=await import('../server/store.mjs');let s=await openStore(db);let r=s.read();assert.deepEqual(r.state.cases.map(c=>c.id),['K2','K1']);assert.deepEqual(r.state.notices.map(c=>c.id),['n1','n2']);assert.equal(r.state.drafts.length,1);s.close();
+ await run();s=await openStore(db);r=s.read();assert.equal(r.state.notices.length,2);assert.equal(r.state.cases.length,2);s.close();
+ sdb=openShipmentsDb(db,{});assert.equal(sdb.seenCount('receiver'),2);sdb.close();
+});
