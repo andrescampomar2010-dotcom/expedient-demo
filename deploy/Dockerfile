@@ -1,4 +1,6 @@
 FROM node:22-slim
+# Se exige Node >= 22.13.0: la imagen falla al construir si el tag 22 resolviera a algo anterior.
+RUN node -e "const [a,b]=process.versions.node.split('.').map(Number);if(!(a>=24||(a===22&&b>=13)))process.exit(1)"
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
