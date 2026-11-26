@@ -37,3 +37,15 @@ test('backup y restauración con base abierta incluyen la tabla de expedientes',
  s=a.read();s.state.cases.unshift(C('Z'));await a.write(s.revision,s.state);a.close();
  assert.equal(run('restore',f,p).status,0);const b=await openStore(p);assert.deepEqual(b.read().state.cases.map(c=>c.id),['A','B']);
 });
+test('avisos y borradores por registro: orden de inserción, conflicto solo en el mismo registro, backup/restauración los incluye',async()=>{
+ const p=mk();const a=await openStore(p),b=await openStore(p);let s=a.read();s.state.notices=[{id:'n1',t:0}];s.state.drafts=[{id:'d1'}];await a.write(s.revision,s.state);
+ const sa=a.read(),sb=b.read();sa.state.notices.push({id:'n2'});await a.write(sa.revision,sa.state);
+ sb.state.notices.push({id:'n3'});await b.write(sb.revision,sb.state);                    // otro aviso, copia vieja: sin conflicto
+ assert.deepEqual(a.read().state.notices.map(n=>n.id),['n1','n2','n3']);
+ const x=a.read(),y=b.read();x.state.notices[0].t=1;await a.write(x.revision,x.state);y.state.notices[0].t=2;
+ await assert.rejects(()=>b.write(y.revision,y.state),/RECORD_CONFLICT/);assert.equal(a.read().state.notices[0].t,1);
+ const run=(...z)=>spawnSync(process.execPath,['scripts/backup.mjs',...z],{encoding:'utf8'});
+ const d=join(mkdtempSync(join(tmpdir(),'bk3-')),'b');const r=run('backup',p,d);assert.equal(r.status,0,r.stderr);const f=r.stdout.match(/Copia: (\S+)/)[1];
+ const z=a.read();z.state.notices.push({id:'n9'});z.state.drafts.push({id:'d9'});await a.write(z.revision,z.state);a.close();b.close();
+ const rs=run('restore',f,p);assert.equal(rs.status,0,rs.stderr);const c=await openStore(p);const st=c.read().state;assert.deepEqual(st.notices.map(n=>n.id),['n1','n2','n3']);assert.deepEqual(st.drafts.map(n=>n.id),['d1']);
+});
