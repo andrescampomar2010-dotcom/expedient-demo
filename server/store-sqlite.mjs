@@ -3,11 +3,17 @@
 import {DatabaseSync} from 'node:sqlite';
 export function openStore(path){
  const db=new DatabaseSync(path);
- db.exec('PRAGMA journal_mode=WAL;PRAGMA busy_timeout=5000;PRAGMA synchronous=NORMAL;');
+ // busy_timeout va PRIMERO: cambiar journal_mode necesita un bloqueo y, sin espera, abrir muchos procesos a la vez fallaba con "database is locked" (reproducido y corregido).
+ db.exec('PRAGMA busy_timeout=5000;');
+ if(db.prepare('PRAGMA journal_mode').get().journal_mode!=='wal')db.exec('PRAGMA journal_mode=WAL;');
+ db.exec('PRAGMA synchronous=NORMAL;');
  db.exec('CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY,v TEXT NOT NULL,ver INTEGER NOT NULL DEFAULT 1,ts TEXT NOT NULL)');
  const get=db.prepare('SELECT v,ver FROM kv WHERE k=?'),ins=db.prepare('INSERT INTO kv(k,v,ver,ts) VALUES(?,?,1,?)'),
-  upd=db.prepare('UPDATE kv SET v=?,ver=ver+1,ts=? WHERE k=? AND ver=?');
+  upd=db.prepare('UPDATE kv SET v=?,ver=ver+1,ts=? WHERE k=? AND ver=?'),getVer=db.prepare('SELECT ver FROM kv WHERE k=?');
+ let raw={k:null,ver:-1,v:null};
  return{
+  // Lectura sin parsear: devuelve el texto guardado y lo conserva en memoria mientras la versión no cambie (consulta de versión barata).
+  readRaw(k){const g=getVer.get(k);const ver=g?g.ver:0;if(!ver)return null;if(raw.k===k&&raw.ver===ver)return{v:raw.v,ver};const r=get.get(k);raw={k,ver:r.ver,v:r.v};return{v:r.v,ver:r.ver}},
   read(k){const r=get.get(k);return r?{value:JSON.parse(r.v),ver:r.ver}:{value:null,ver:0}},
   write(k,value,expectedVer){
    const now=new Date().toISOString(),s=JSON.stringify(value);
