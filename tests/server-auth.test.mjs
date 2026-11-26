@@ -42,3 +42,23 @@ test('gestión de usuarios: solo admin, sin hashes, no se borra el último admin
   assert.equal((await fetch(base+'/api/status',{headers:{cookie:op}})).status,401,'la sesión de un usuario borrado deja de valer');
  }finally{p.kill()}
 });
+test('HTTP: cambio de clave propio y administración de rol/restablecimiento',async()=>{
+ const d=mkdtempSync(join(tmpdir(),'pw-')),up=join(d,'users.json');
+ for(const [n,r] of [['jefa','admin'],['ana','operador']])assert.equal(spawnSync(process.execPath,['scripts/adduser.mjs',n,r],{env:{...process.env,APP_USERS_PATH:up,ADDUSER_PASSWORD:'una-clave-larga-1'}}).status,0);
+ const p=await start({APP_AUTH:'local',APP_USERS_PATH:up,APP_DATA_PATH:join(d,'t.db'),INTEGRATION_MOCK:'true'});
+ try{
+  const base=`http://localhost:${PORT}`;const ck=async(n,pw='una-clave-larga-1')=>{const r=await post('/api/login',{name:n,password:pw});return r.status===200?r.headers.get('set-cookie').split(';')[0]:null};
+  const adm=await ck('jefa'),op=await ck('ana'),op2=await ck('ana');
+  assert.equal((await post('/api/me/password',{current:'mala',next:'nueva-clave-larga-9'},op)).status,400);
+  assert.equal((await post('/api/me/password',{current:'una-clave-larga-1',next:'nueva-clave-larga-9'},op)).status,200);
+  assert.equal((await fetch(base+'/api/status',{headers:{cookie:op}})).status,200);assert.equal((await fetch(base+'/api/status',{headers:{cookie:op2}})).status,401);
+  assert.equal(await ck('ana'),null);assert.ok(await ck('ana','nueva-clave-larga-9'));
+  assert.equal((await post('/api/users',{action:'role',name:'ana',role:'lector'},op)).status,403,'un operador no cambia roles');
+  assert.equal((await post('/api/users',{action:'role',name:'ana',role:'lector'},adm)).status,200);
+  assert.equal((await fetch(base+'/api/status',{headers:{cookie:op}})).status,401,'cambio de rol revoca sus sesiones');
+  assert.equal((await post('/api/users',{action:'role',name:'jefa',role:'lector'},adm)).status,400,'último admin protegido');
+  assert.equal((await post('/api/users',{action:'reset',name:'ana',password:'reinicio-largo-33'},adm)).status,200);
+  assert.ok(await ck('ana','reinicio-largo-33'));
+  const l=await (await fetch(base+'/api/users',{headers:{cookie:adm}})).json();assert.equal(l.users.length,2,'ninguna cuenta se borró');
+ }finally{p.kill()}
+});
