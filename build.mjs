@@ -6,6 +6,6 @@ const ship=read('web/shipments.mjs').replaceAll('export ','');
 const shipUi=read('web/shipments-ui.mjs').replace("import * as S from './shipments.mjs';",'').replace('export function','function');
 const app=read('web/app.mjs').replace("import * as C from './core.mjs';",'').replace("import {shipmentsUI} from './shipments-ui.mjs';",'').replace("import {integrationUI} from './integration.mjs';",'');
 const exports=['VERSION','uid','blank','newCase','audit','invalidate','totals','issues','propose','review','assign','csv','exportCase','parseCsv','sample'];
-const code=`const C=(()=>{${core}\nreturn {${exports.join(',')}};})();\n${integration}\nconst S=(()=>{${ship}\nreturn {ensure,blankShipments,demoState,DEMO_INBOX,ingestMail,confirmPending,addShipment,attachProposal,summarize,search,stats,fmt};})();\n${shipUi}\n${app}`;
+const code=`const C=(()=>{${core}\nreturn {${exports.join(',')}};})();\n${integration}\nconst S=(()=>{${ship}\nreturn {ensure,blankShipments,demoState,DEMO_INBOX,ingestMail,confirmPending,addShipment,attachProposal,summarize,search,stats,fmt,ATT_LABEL};})();\n${shipUi}\n${app}`;
 const html=read('web/index.html').replace('<link rel="stylesheet" href="style.css">','<style>'+read('web/style.css')+'</style>').replace('<script type="module" src="app.mjs"></script>','<script>'+code.replaceAll('</script','<\\/script')+'</script>');
 writeFileSync(new URL('Expedient_demo.html',root),html);writeFileSync(new URL('Expedient_demo.html.txt',root),html);console.log('Standalone demo built');
