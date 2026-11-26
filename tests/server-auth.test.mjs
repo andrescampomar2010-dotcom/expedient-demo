@@ -24,3 +24,21 @@ test('login local: health abierto, API cerrada sin sesión, lector no escribe, o
 test('con APP_PUBLIC_URL sin autenticación el servidor se niega a arrancar',async()=>{
  await assert.rejects(()=>start({APP_PUBLIC_URL:'https://expedient.example',APP_DATA_PATH:join(mkdtempSync(join(tmpdir(),'a-')),'t.db'),INTEGRATION_MOCK:'true'}),/APP_AUTH=local/);
 });
+test('gestión de usuarios: solo admin, sin hashes, no se borra el último admin, borrar cierra sus sesiones',async()=>{
+ const d=mkdtempSync(join(tmpdir(),'adm-')),up=join(d,'users.json');
+ for(const [n,r] of [['jefa','admin'],['ana','operador']])assert.equal(spawnSync(process.execPath,['scripts/adduser.mjs',n,r],{env:{...process.env,APP_USERS_PATH:up,ADDUSER_PASSWORD:'una-clave-larga-1'}}).status,0);
+ const p=await start({APP_AUTH:'local',APP_USERS_PATH:up,APP_DATA_PATH:join(d,'t.db'),INTEGRATION_MOCK:'true'});
+ try{
+  const base=`http://localhost:${PORT}`;const ck=async n=>(await post('/api/login',{name:n,password:'una-clave-larga-1'})).headers.get('set-cookie').split(';')[0];
+  const adm=await ck('jefa'),op=await ck('ana');
+  assert.equal((await fetch(base+'/api/users',{headers:{cookie:op}})).status,403);
+  assert.equal((await post('/api/users',{name:'x',password:'una-clave-larga-1',role:'lector'},op)).status,403);
+  const l=await (await fetch(base+'/api/users',{headers:{cookie:adm}})).json();assert.equal(l.users.length,2);assert.ok(!JSON.stringify(l).includes('hash')&&!JSON.stringify(l).includes('salt'));
+  assert.equal((await post('/api/users',{name:'eva',password:'una-clave-larga-1',role:'lector'},adm)).status,200);
+  assert.equal((await post('/api/users',{name:'corta',password:'x',role:'lector'},adm)).status,400);
+  const del=(name,c)=>fetch(base+'/api/users',{method:'DELETE',headers:{'content-type':'application/json',origin:base,cookie:c},body:JSON.stringify({name})});
+  assert.equal((await del('jefa',adm)).status,400,'no se puede borrar el último admin');
+  assert.equal((await del('ana',adm)).status,200);
+  assert.equal((await fetch(base+'/api/status',{headers:{cookie:op}})).status,401,'la sesión de un usuario borrado deja de valer');
+ }finally{p.kill()}
+});
