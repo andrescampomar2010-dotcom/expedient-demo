@@ -118,9 +118,9 @@ export function openShipmentsDb(path,{ownDomains=[]}={}){
    return res;
   },
   // ---- migración desde el estado completo antiguo (state.shipments) ----
-  importLegacy(legacy){
+  importLegacy(legacy,{append=false}={}){
    if(!legacy||!Array.isArray(legacy.items))return{imported:false,reason:'sin datos'};
-   if(q('SELECT 1 FROM meta WHERE k=?').get('migrated'))return{imported:false,reason:'ya migrado'};
+   if(!append&&q('SELECT 1 FROM meta WHERE k=?').get('migrated'))return{imported:false,reason:'ya migrado'};
    db.exec('BEGIN IMMEDIATE');
    try{
     const ins=q('INSERT OR IGNORE INTO ship(id,ver,status,open,rej,dua,exp,updated,sum,json,hay) VALUES(?,1,?,?,?,?,?,?,?,?,?)');
@@ -130,7 +130,7 @@ export function openShipmentsDb(path,{ownDomains=[]}={}){
     let seq=1;for(const p of legacy.pending||[])q('INSERT OR IGNORE INTO pending(mail_id,seq,json) VALUES(?,?,?)').run(p.mailId,seq++,JSON.stringify(p));
     if(legacy.ownDomains?.length)api.setOwnDomains(legacy.ownDomains);
     const counts={shipments:legacy.items.length,mails:(legacy.mails||[]).length,pending:(legacy.pending||[]).length};
-    q('INSERT INTO meta(k,v) VALUES(?,?)').run('migrated',JSON.stringify({at:new Date().toISOString(),...counts}));
+    q('INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run('migrated',JSON.stringify({at:new Date().toISOString(),...counts}));
     db.exec('COMMIT');return{imported:true,...counts};
    }catch(e){db.exec('ROLLBACK');throw e}
   },
