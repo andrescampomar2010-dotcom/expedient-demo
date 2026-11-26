@@ -22,6 +22,10 @@ export function createUsers(doc={users:{},sessions:{}},{ttlMs=8*3600e3,maxFails=
    u.fails=0;const t=randomBytes(32).toString('hex');doc.sessions[tok(t)]={name,exp:now()+ttlMs};return{token:t,role:u.role,name};
   },
   check(t){const s=doc.sessions[tok(String(t||''))];if(!s)return null;if(s.exp<now()){delete doc.sessions[tok(t)];return null}const u=doc.users[s.name];return u?{name:s.name,role:u.role}:null},
+  list(){return Object.entries(doc.users).map(([name,u])=>({name,role:u.role,locked:u.lockedUntil>now()}))},
+  remove(name){name=String(name).trim().toLowerCase();const u=doc.users[name];if(!u)throw Error('USER_NOT_FOUND');
+   if(u.role==='admin'&&Object.values(doc.users).filter(x=>x.role==='admin').length<=1)throw Error('LAST_ADMIN');
+   delete doc.users[name];for(const [k,v] of Object.entries(doc.sessions))if(v.name===name)delete doc.sessions[k]},
   logout(t){delete doc.sessions[tok(String(t||''))]}
  };
 }
