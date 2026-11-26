@@ -36,3 +36,8 @@ Orientación genérica para dimensionar, **sin volumen real**: un equipo pequeñ
 ## Qué NO prueban las mediciones
 
 Un solo proceso en un ordenador de desarrollo, datos sintéticos de formato uniforme, 5 correos por envío (supuesto), sin red, sin Microsoft Graph, sin adjuntos, sin personas usando la interfaz a la vez y sin la escritura del JSON completo en cada cambio. Son útiles para detectar cuellos de botella, no para afirmar capacidad.
+
+## Almacén SQLite conectado (probado) y defectos que quedan
+
+- Si `APP_DATA_PATH` termina en `.db`, `server/store.mjs` usa SQLite (misma interfaz, transacción, rechazo de cambios concurrentes con `REVISION_CONFLICT`). Límites configurables: `APP_MAX_CASES` (50.000 por defecto) y `APP_MAX_KNOWLEDGE`. Con `.json` sigue el modo demo, con tope de 500 expedientes, que **no sirve** para un volumen diario alto de envíos.
+- Defectos de implementación pendientes (no son decisiones del cliente): `server/server.mjs` solo acepta `localhost` (comprobación de Host y Origin, callback fijo), así que falta una opción `APP_PUBLIC_URL` con HTTPS detrás de proxy; falta conectar `users.mjs` (pantalla de acceso y rol por ruta) y el script de instalación/servicio. Requisitos de configuración en destino (no son defectos): dominio y certificado, registro de la app en Entra, buzón, clave de IA si se activa.
