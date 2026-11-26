@@ -72,7 +72,7 @@ Con una base `.db` (`APP_DATA_PATH=...db`) los envíos viven en tablas por regis
 | 10000 × 5 (~100 días) | ~366 | ~60 ms | ~105 ms | 0 | ~134 MB | 102 MB |
 Recepción de correo (un proceso, `scripts/loadingest.mjs`): 2200×5 p50/p95/p99 0,8/2,7/3,8 ms; 10000×5 0,9/3,2/4,1 ms.
 **No demuestra:** horizonte de 12 meses (no medido), Microsoft Graph real, adjuntos en el bucle, navegador real, hardware del destino. Las escrituras se serializan en el único escritor de SQLite. El **espacio compartido (casos)** sigue siendo un documento completo y devuelve 409 ante conflicto (en la mezcla, ~50 % de sus escrituras simultáneas).
-Repetir: `node scripts/loadhttp.mjs --shipments 2200 --mails 5 --seconds 15` y `node scripts/loadingest.mjs --shipments 2200 --mails 5 --n 400`.
+Repetir: `node scripts/loadhttp.mjs --shipments 2200 --mails 5 --seconds 15 [--cases 300]` y `node scripts/loadingest.mjs --shipments 2200 --mails 5 --n 400`.
 
 ## Instalación desde cero sin Docker: secuencia validada
 Validada el 26/11/2026 en una copia nueva (`git clone`, `npm ci --omit=dev`, Linux, Node 22+), sin systemd ni proxy:
@@ -83,3 +83,15 @@ Validada el 26/11/2026 en una copia nueva (`git clone`, `npm ci --omit=dev`, Lin
 5. `GET /api/shipments/stats` y alta con `POST /api/shipments/op` (cabeceras `origin` y `x-csrf-token`).
 6. Parar la app, `node scripts/backup.mjs backup /ruta/x.db /ruta/bk`, borrar la base, `node scripts/backup.mjs restore <copia>.db /ruta/x.db`, volver a arrancar y comprobar `/api/health`.
 `npm test` en la copia nueva: 100 pruebas, 97 pasan y 3 (OCR) se omiten sin `TESSDATA_PREFIX`; 0 fallos. Con el modelo de OCR instalado pasan las 100 (probado en el entorno de desarrollo). Sin validar aquí: Docker, systemd, nginx, Graph.
+
+## Expedientes y estado del receptor por registro (ampliación)
+- **Expedientes**: con base `.db` cada expediente es una fila (`casos`, con su versión). Guardar el espacio solo escribe los expedientes que la persona cambió; el conflicto (409 `CASE_CONFLICT_RELOAD_BEFORE_EDITING`, con `caseId`) solo salta si otra persona cambió **ese mismo** expediente. `APP_CASES_STORE=document` conserva el modo antiguo. Migración al primer arranque con copia íntegra `<base>.expedientes-anterior.json`. Orden: más reciente primero; un guardado no borra expedientes (no hay borrado por esta vía).
+- **Parte común** (avisos, borradores, conocimiento, historial): sigue siendo un único documento con revisión. Si la persona no la modificó, su guardado no choca con cambios de otros; si la modificó sobre una base vieja, 409 (`REVISION_CONFLICT_RELOAD_BEFORE_EDITING`). **Sigue siendo un defecto de escala pendiente.**
+- **Receptor de correo**: cursor y correos ya vistos (`seen`) viven en tablas propias (`meta`, `seen`), fuera del documento compartido; un reintento tras fallo o un reinicio no duplica correos ni reescribe el documento si no hubo cambios en expedientes. Migración de `receiver`/`receiverSent` con copias `<base>.receptor-*-anterior.json`.
+- Pestaña Envíos: la barra de guardado global se sustituye por un aviso (los envíos se guardan solos); en Expedientes aparece "Guardar espacio".
+
+### Medición ampliada (mismas condiciones y salvedades; "0 errores" excluye los 409 esperados, que se cuentan aparte)
+| Histórico | req/s | p50 | p99 | 409 esperados | RSS | Base |
+|---|---|---|---|---|---|---|
+| 26000 envíos × 5 correos (volumen sintético de ~12 meses; 130 000 correos; 108 MB) | ~668 | ~35 ms | ~62 ms | edición de expediente: 1 de 304 (mismo expediente); escritura de la parte común: 141 de 325 | ~142 MB | 259 MB |
+Defecto real hallado y corregido al medir 12 meses: la lista sin filtro ordenaba toda la tabla (sin índice): 148 req/s y p50 ~140 ms; con el índice `ship_order` 668 req/s (regresión cubierta por prueba del plan de consulta). La instalación no se certifica por esta cifra: bucle cerrado sintético, mismas 2 CPU para generador y servidor, sin Graph, adjuntos ni navegador reales.
