@@ -19,3 +19,15 @@ test('bloqueo tras fallos y caducidad de sesión',()=>{
  assert.equal(u.login('a','una-clave-larga-1').locked,true);
  t=1500;const s=u.login('a','una-clave-larga-1');assert.ok(s.token);t=2100;assert.equal(u.check(s.token),null);
 });
+test('cambio de clave propio, restablecimiento y rol: sesiones revocadas, cuenta conservada, último admin protegido',()=>{
+ const u=createUsers();u.add('jefa','una-clave-larga-1','admin');u.add('ana','una-clave-larga-1','operador');
+ const a1=u.login('ana','una-clave-larga-1'),a2=u.login('ana','una-clave-larga-1');
+ assert.throws(()=>u.changeOwnPassword(a1.token,'mala','otra-clave-larga-2'),/WRONG_PASSWORD/);
+ assert.throws(()=>u.changeOwnPassword(a1.token,'una-clave-larga-1','corta'),/PASSWORD_TOO_SHORT/);
+ u.changeOwnPassword(a1.token,'una-clave-larga-1','otra-clave-larga-2');
+ assert.ok(u.check(a1.token),'la sesión actual sigue');assert.equal(u.check(a2.token),null,'las demás se cierran');
+ assert.equal(u.login('ana','una-clave-larga-1'),null);assert.ok(u.login('ana','otra-clave-larga-2'));
+ const a3=u.login('ana','otra-clave-larga-2');u.adminResetPassword('ana','reinicio-largo-33');assert.equal(u.check(a3.token),null);assert.ok(u.login('ana','reinicio-largo-33'));
+ const a4=u.login('ana','reinicio-largo-33');u.setRole('ana','lector');assert.equal(u.check(a4.token),null);assert.equal(u.list().find(x=>x.name==='ana').role,'lector');
+ assert.throws(()=>u.setRole('jefa','lector'),/LAST_ADMIN/);u.setRole('ana','admin');u.setRole('jefa','lector');assert.throws(()=>u.setRole('ana','operador'),/LAST_ADMIN/);
+});
