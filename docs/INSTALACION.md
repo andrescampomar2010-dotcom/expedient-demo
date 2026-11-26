@@ -95,3 +95,14 @@ Validada el 26/11/2026 en una copia nueva (`git clone`, `npm ci --omit=dev`, Lin
 |---|---|---|---|---|---|---|
 | 26000 envíos × 5 correos (volumen sintético de ~12 meses; 130 000 correos; 108 MB) | ~668 | ~35 ms | ~62 ms | edición de expediente: 1 de 304 (mismo expediente); escritura de la parte común: 141 de 325 | ~142 MB | 259 MB |
 Defecto real hallado y corregido al medir 12 meses: la lista sin filtro ordenaba toda la tabla (sin índice): 148 req/s y p50 ~140 ms; con el índice `ship_order` 668 req/s (regresión cubierta por prueba del plan de consulta). La instalación no se certifica por esta cifra: bucle cerrado sintético, mismas 2 CPU para generador y servidor, sin Graph, adjuntos ni navegador reales.
+
+## Avisos y borradores por registro; medición final de esta versión
+Con base `.db`, además de envíos y expedientes, los **avisos** y **borradores** son filas propias (`reg`): el conflicto (409 `RECORD_CONFLICT_RELOAD_BEFORE_EDITING`, con `coll` y `caseId`) solo salta si dos personas cambian el mismo registro; añadir avisos o borradores distintos no choca. Queda como documento único con revisión solo la parte restante (conocimiento, historial, configuración): 409 `REVISION_CONFLICT_...` si se modifica sobre una base vieja. Migración al primer arranque con copias `<base>.avisos-anterior.json` y `<base>.borradores-anterior.json` (probada con un espacio antiguo completo: receptor, expedientes, avisos, borradores; el segundo arranque no repite). Modo producción vacío: el texto de la bandeja ya no invita a cargar el ejemplo. Para restaurar una copia hay que parar la aplicación (con la base abierta por otro proceso la restauración puede fallar con "database is locked").
+
+Mezcla de la medición (30 sesiones, bucle cerrado sin pausa, 2 CPU compartidas con el generador, sintético): envíos 92% (lista 35%, ficha 25%, búsqueda DUA 12%, pendientes 5%, stats 5%, altas 10%), espacio compartido 8% repartido en lectura 20%, edición de expediente 20%, aviso nuevo 15%, edición de aviso 15%, borrador nuevo 15% (todos por registro) e historial 15% (documento común).
+| Histórico | req/s | p50 / p95 / p99 (lista) | 409 por registro | 409 de revisión (historial) | RSS | Base |
+|---|---|---|---|---|---|---|
+| 2200 × 5 (22 días) | ~477 | ~45 / 70 / 88 ms | 0 de ~380 | 20 de 81 | ~154 MB | ~26 MB |
+| 26000 × 5 (12 meses, 130 000 correos) | ~462 | ~49 / 75 / 89 ms | 0 de ~420 | 24 de 101 | ~154 MB | ~259 MB |
+| 13000 × 15 (6 meses, 195 000 correos, 153 MB) | ~423 | ~54 / 81 / 91 ms | 0 de ~400 | 20 de 92 | ~158 MB | ~287 MB |
+"0 errores" significa sin errores de conexión ni 5xx; los 409 esperados se cuentan aparte. Las escrituras del espacio devuelven el estado completo y ya son más lentas (p99 ~95-140 ms). Sin medir: 12 meses con 15 correos por envío (el generador de datos no cabe en la prueba: 390 000 correos), Graph real, adjuntos, navegador real, hardware del destino. No es una certificación de capacidad.
