@@ -32,3 +32,9 @@ En el entorno de preparación no hay Docker ni nginx: la imagen no se ha constru
 
 ## Alertas de lectura de correo
 Si el receptor se detiene, `/api/status` muestra `receiver.alert`, el código y la acción a seguir, se escribe una línea `ALERTA receptor de correo detenido: ...` en el registro del servicio (journald o `docker logs`) y `/api/health` devuelve 503 para que la monitorización de la empresa lo recoja. Los mensajes llevan solo códigos, nunca el texto del error original. Probado: la lógica (`tests/health.test.mjs`). **No probado:** el camino completo con un fallo real de Microsoft Graph (requiere cuenta real); la interfaz todavía no muestra un aviso visual de la alerta ni explica el error 409 de guardado con un mensaje propio.
+
+## Adjuntos recibidos
+- Se leen PDF digitales (librería `pdfjs-dist` 6.5.438, licencia Apache-2.0, mantenida por Mozilla, `npm audit` sin avisos en la fecha de la prueba) y XLSX (`exceljs`). Límites: 5 MB, 30 páginas, 8.000 caracteres guardados por correo y 8 s de lectura. El texto leído se usa para encontrar DUA, expediente o referencia y para la búsqueda.
+- Un PDF sin texto (escaneo) **no se lee** (no hay OCR): queda marcado "sin texto: no leído, posible escaneo" en la ficha y en la fuente del evento. Lo mismo para archivos demasiado grandes, ilegibles o de otro tipo.
+- Probado con fixtures de Graph (`tests/receiver-attachments.test.mjs`): un DUA que solo está dentro de un PDF vincula el correo al envío, con el nombre del adjunto en la fuente; un PDF escaneado queda en Pendientes con aviso. El límite de tiempo está implementado pero su prueba no es determinista. No probado: PDF protegidos con clave, PDF de varios cientos de páginas, ni adjuntos reales de Graph de clientes.
+- Corregido un defecto: la interfaz solo se activaba en `localhost`; ahora también funciona servida por HTTPS en un dominio (`tests/ui-served.test.mjs`). Sin esto, en destino se habría quedado en modo HTML autónomo.
