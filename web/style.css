@@ -3,3 +3,6 @@
 main{overflow-wrap:anywhere}pre{max-width:100%;overflow-wrap:anywhere}header>div{min-width:0}@media(max-width:360px){header{flex-wrap:wrap}header .tag{max-width:none}h1{font-size:29px}.line{padding:14px}button{max-width:100%}}
 pre{white-space:pre-wrap;word-break:break-word}
 main.setup{max-width:720px;margin:2rem auto;padding:0 1rem;line-height:1.5}main.setup input:not([type=checkbox]){max-width:100%}
+
+.line.click{cursor:pointer}.line.click:hover{background:var(--wash)}.line.hit{border-left:4px solid #e0a800}.tag.warn{background:#fde8e0;color:#a03a14}.tag.ok{background:#e1f4e6;color:#1d6b35}
+main .tag{display:inline-block;margin:2px 4px 2px 0;padding:1px 9px;border-radius:10px;background:var(--wash);color:var(--teal);font-size:12.5px;font-weight:600}main .tag.warn{background:#fde8e0;color:#a03a14}main .tag.ok{background:#e1f4e6;color:#1d6b35}
