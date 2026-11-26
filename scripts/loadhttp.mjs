@@ -2,7 +2,7 @@
 // Uso: node scripts/loadhttp.mjs [--sessions 30] [--shipments 100] [--mails 5] [--seconds 30] [--write 0.1]
 // 30 sesiones = 30 hilos, cada uno con su login. Mezcla por sesión (sin tiempo de pensar entre acciones, peor caso que un uso humano):
 //   lista paginada 35% · ficha de un envío 25% · búsqueda por DUA 12% · pendientes 5% · estadísticas 5%
-//   alta de envío (escritura por registro) 10% · espacio compartido (casos): lectura y POST con revisión, 8% (aquí sigue habiendo 409).
+//   alta de envío (escritura por registro) 10% · espacio compartido 8%: lectura, edición de un expediente (fila propia: 409 solo si dos sesiones tocan el mismo) y escritura del documento (avisos: sigue con 409 de revisión).
 // El generador y el servidor comparten la máquina: los números incluyen esa competencia. No es una prueba de capacidad certificada.
 import {Worker,isMainThread,workerData,parentPort} from 'node:worker_threads';
 import {spawn,spawnSync,execFileSync} from 'node:child_process';import {mkdtempSync,statSync,existsSync} from 'node:fs';import {tmpdir} from 'node:os';import {join,resolve,dirname} from 'node:path';import {fileURLToPath} from 'node:url';
@@ -29,8 +29,10 @@ if(!isMainThread){
   else if(x<.82){const r=await fetch(base+'/api/shipments/stats',{headers:H(cookie)});await r.arrayBuffer();rec('stats',t,r.status)}
   else if(x<.92){const [t0,c]=await opPost({op:'create',data:{id:`TR-L${seed}-${n++}`,dua:`26ES9${seed}${n}`.padEnd(14,'0'),exp:`EXP-2699-${seed}`}});rec('alta',t0,c)}
   else{const r0=await fetch(base+'/api/workspace',{headers:H(cookie)});const w=await r0.json();
-   if(R()<.5){rec('espacio-lee',t,r0.status)}
-   else{w.state.notices=[...(w.state.notices||[]).slice(-5),{id:'n'+seed+'-'+n++,text:'aviso'}];const body=JSON.stringify({revision:w.revision,state:w.state});bytesOut+=body.length;t=performance.now();const r=await fetch(base+'/api/workspace',{method:'POST',headers:{...H(cookie),'content-type':'application/json','x-csrf-token':csrf},body});await r.arrayBuffer();rec('espacio-escribe',t,r.status)}}
+   const y=R();
+   if(y<.34){rec('espacio-lee',t,r0.status)}
+   else if(y<.67){const cs=w.state.cases||[];const c=cs[Math.floor(R()*cs.length)];if(c){c.n=(c.n||0)+1;const body=JSON.stringify({revision:w.revision,docH:w.docH,state:w.state});bytesOut+=body.length;t=performance.now();const r=await fetch(base+'/api/workspace',{method:'POST',headers:{...H(cookie),'content-type':'application/json','x-csrf-token':csrf},body});await r.arrayBuffer();rec('caso-escribe',t,r.status)}}
+   else{w.state.notices=[...(w.state.notices||[]).slice(-5),{id:'n'+seed+'-'+n++,text:'aviso'}];const body=JSON.stringify({revision:w.revision,docH:w.docH,state:w.state});bytesOut+=body.length;t=performance.now();const r=await fetch(base+'/api/workspace',{method:'POST',headers:{...H(cookie),'content-type':'application/json','x-csrf-token':csrf},body});await r.arrayBuffer();rec('aviso-documento-escribe',t,r.status)}}
  }
  parentPort.postMessage({lat,codes,bytesIn,bytesOut});
 }else{
@@ -45,6 +47,7 @@ if(!isMainThread){
   for(let k=0;k<mails;k++){const [dir,dom,sub,body]=tpl[k%tpl.length];sh.ingestMail(state,{id:`m${id}-${k}`,threadId:'th'+id,from:(dir==='out'?'ops@':'x@')+dom,subject:`${sub} TR-${n}`,date:new Date(Date.UTC(2026,0,1,8,0)+(id*mails+k)*60000).toISOString(),body:`${body} ${dua} ${'texto de relleno de un correo habitual. '.repeat(3)}`});}}
  const preloadS=(performance.now()-t0)/1000;
  {const {openShipmentsDb}=await import(ROOT+'/server/shipments-db.mjs');const sdb=openShipmentsDb(db,{ownDomains:['empresa.example']});sdb.importLegacy(state.shipments);sdb.close();}
+ {const {openStore}=await import(ROOT+'/server/store.mjs');const ws=await openStore(db);const cur=ws.read();cur.state.cases=Array.from({length:arg('cases',300)},(_,i)=>({id:'C-'+i,title:'Expediente sintético '+i,n:0,audit:[]}));await ws.write(cur.revision,cur.state);ws.close();}
  const stateMB=JSON.stringify(state.shipments).length/1e6;
  const pw='una-clave-larga-1';
  spawnSync(process.execPath,[ROOT+'/scripts/adduser.mjs','carga','operador'],{env:{...process.env,APP_USERS_PATH:users,ADDUSER_PASSWORD:pw}});
