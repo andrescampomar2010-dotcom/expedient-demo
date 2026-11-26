@@ -87,9 +87,9 @@ function classify(mail) {
   if (/subsan|corregid[oa] y reenvi|reenviamos (la )?(declaracion|dua)/.test(t)) return out ? 'subsanacion' : 'info';
   if (/levante|autorizad[oa] (la )?(salida|declaracion)/.test(t)) return 'levante';
   if (/dua presentad|declaracion presentad|presentamos (el|la) (dua|declaracion)/.test(t)) return out ? 'dua_presentado' : 'info';
+  if (/entregad[oa] en destino|(ha sido|fue|queda) entregad[oa]|entregad[oa],? gracias/.test(norm(mail.body || ''))) return 'entrega';
   if (/correccion|corrige|cambia el camion|nueva matricula/.test(t)) return 'correccion';
   if (/matricula|camion asignado|remolque/.test(t)) return out ? 'pedido_matriculas' : 'matriculas';
-  if (/entregad[oa]/.test(t)) return 'entrega';
   if (/adjunt|documentacion|documento/.test(t)) return out ? 'documentacion' : 'info';
   return out ? 'gestion' : 'info';
 }
@@ -97,23 +97,49 @@ function classify(mail) {
 function openShipments(S) { return S.items.filter(s => s.status !== 'Entregado'); }
 const byNum = (a, b) => (a != null && b != null && a === b);
 
+// Índices en memoria (se reconstruyen si cambia el nº de envíos o correos). Evitan recorrer todo el histórico por cada correo.
+const IDX = new WeakMap();
+function indexOf(S) {
+  let c = IDX.get(S);
+  const put = (m, k, s) => { if (k == null || k === '') return; const a = m.get(k); if (a) a.push(s); else m.set(k, [s]); };
+  if (c && c.itemsRef === S.items && c.mailsRef === S.mails && S.items.length > c.ni) {
+    for (; c.ni < S.items.length; c.ni++) { const s = S.items[c.ni]; c.id.set(s.id, s); put(c.dua, s.dua, s); put(c.exp, s.exp, s); }
+  }
+  if (!c || c.ni !== S.items.length || c.mailsRef !== S.mails || c.itemsRef !== S.items) {
+    c = { ni: S.items.length, nm: 0, mailsRef: S.mails, itemsRef: S.items, id: new Map(), dua: new Map(), exp: new Map(), thread: new Map(), mailId: new Map() };
+    for (const s of S.items) { c.id.set(s.id, s); put(c.dua, s.dua, s); put(c.exp, s.exp, s); }
+    IDX.set(S, c);
+  }
+  for (; c.nm < S.mails.length; c.nm++) indexMail(c, S.mails[c.nm]);
+  return c;
+}
+function indexMail(c, m) {
+  c.mailId.set(m.id, m);
+  if (m.threadId && m.shipmentId) { let t = c.thread.get(m.threadId); if (!t) c.thread.set(m.threadId, t = new Set()); t.add(m.shipmentId); }
+}
 function candidatesFor(S, x, mail) {
   const found = new Map();
   const add = (s, how, sure) => { const p = found.get(s.id); if (!p) found.set(s.id, { id: s.id, hows: [how], sure }); else { p.hows.push(how); p.sure = p.sure || sure; } };
-  for (const s of S.items) {
+  const ix = indexOf(S);
+  const hit = new Set();
+  for (const d of x.duas) for (const s of ix.dua.get(d) || []) hit.add(s);
+  for (const e of x.exps) for (const s of ix.exp.get(e) || []) hit.add(s);
+  for (const r of x.refs) { const s = ix.id.get(r); if (s) hit.add(s); }
+  const thr = mail.threadId ? ix.thread.get(mail.threadId) : null;
+  if (thr) for (const id of thr) { const s = ix.id.get(id); if (s) hit.add(s); }
+  for (const s of S.items.length > 0 ? [...hit] : []) {
     if (x.duas.includes(s.dua)) add(s, `número de DUA ${s.dua}`, true);
     if (x.exps.includes(s.exp)) add(s, `expediente ${s.exp}`, true);
     if (x.refs.includes(s.id)) add(s, `referencia ${s.id}`, true);
-    const prev = mail.threadId && S.mails.find(m => m.threadId === mail.threadId && m.shipmentId === s.id);
-    if (prev) add(s, 'misma conversación de correo', true);
+    if (thr && thr.has(s.id)) add(s, 'misma conversación de correo', true);
   }
   if (found.size) return { sure: true, list: [...found.values()] };
   const weak = new Map();
   const addW = (s, how) => { const p = weak.get(s.id); if (!p) weak.set(s.id, { id: s.id, hows: [how], sure: false }); else p.hows.push(how); };
   const open = openShipments(S);
   if (x.bultos != null && x.kg != null) for (const s of open) if (byNum(x.bultos, s.bultos) && byNum(x.kg, s.kg)) addW(s, `bultos (${x.bultos}) y kilos (${x.kg}) coinciden`);
-  const dom = domainOf(mail.from);
-  if (dom) for (const s of open) if (dom === s.clientDomain || dom === s.providerDomain) addW(s, `remitente del dominio ${dom}`);
+  const doms = mail.direction === 'out' ? [...new Set((mail.to || []).map(domainOf))] : [domainOf(mail.from)];
+  for (const dom of doms) if (dom) for (const s of open) if (dom === s.clientDomain || dom === s.providerDomain) addW(s, `${mail.direction === 'out' ? 'destinatario' : 'remitente'} del dominio ${dom}`);
   for (const s of open) { const pl = [...x.plates, ...x.trailers]; if (pl.length && (s.plates || []).some(p => pl.includes(p.value))) addW(s, 'matrícula ya vista en este envío'); }
   return { sure: false, list: [...weak.values()] };
 }
@@ -132,6 +158,7 @@ function makeEvent(mail, x, shipment) {
 
 function applyToShipment(S, mail, x, shipment, how, sure) {
   mail.shipmentId = shipment.id; mail.how = how; mail.sure = sure;
+  { const c = IDX.get(S); if (c) indexMail(c, mail); }
   const ev = makeEvent(mail, x, shipment);
   if (!sure) { ev.text += ' (relación confirmada por ti)'; }
   // Datos nuevos: nunca se borran los anteriores; si contradicen, se marca corrección.
@@ -160,7 +187,7 @@ function ingestMail(state, mailIn) {
   const S = ensure(state);
   const mail = { attachments: [], ...mailIn };
   if (!mail.id || !mail.date) throw Error('MAIL_NEEDS_ID_AND_DATE');
-  if (S.mails.some(m => m.id === mail.id)) return { status: 'duplicate', why: 'Este correo ya estaba registrado.' };
+  if (indexOf(S).mailId.has(mail.id)) return { status: 'duplicate', why: 'Este correo ya estaba registrado.' };
   mail.direction ||= (S.ownDomains || []).includes(domainOf(mail.from)) ? 'out' : 'in';
   const x = extract(mail);
   mail.body = String(mail.body || '').slice(0, 20000);
@@ -190,7 +217,7 @@ function ingestMail(state, mailIn) {
   S.pending.push(p); return { status: 'pending', ...p };
 }
 
-function confirmPending(state, mailId, shipmentId) {
+function confirmPending(state, mailId, shipmentId, via = '') {
   const S = ensure(state);
   const i = S.pending.findIndex(p => p.mailId === mailId);
   if (i < 0) throw Error('NOT_PENDING');
@@ -200,24 +227,39 @@ function confirmPending(state, mailId, shipmentId) {
   if (!s) throw Error('UNKNOWN_SHIPMENT');
   const x = extract(mail);
   S.pending.splice(i, 1);
-  applyToShipment(S, mail, x, s, 'Confirmado por ti.', false);
+  applyToShipment(S, mail, x, s, via === 'ai' ? 'Confirmado por ti a partir de una sugerencia de IA (no verificada).' : 'Confirmado por ti.', false);
   return { shipmentId };
+}
+
+// La IA solo PROPONE. Se valida contra los envíos abiertos; nunca asigna ni cambia el estado del envío.
+function attachProposal(state, mailId, prop) {
+  const S = ensure(state);
+  const p = S.pending.find(p => p.mailId === mailId);
+  if (!p || !prop || prop.error) return false;
+  const ids = S.items.filter(s => s.status !== 'Entregado').map(s => s.id);
+  const id = prop.shipmentId === null ? null : String(prop.shipmentId);
+  if (id !== null && !ids.includes(id)) return false;
+  p.ai = { shipmentId: id, confidence: ['alta', 'media', 'baja'].includes(prop.confidence) ? prop.confidence : 'baja', reason: String(prop.reason || '').slice(0, 300), model: String(prop.model || '').slice(0, 80), simulated: !!prop.simulated, outsideRules: id !== null && !p.candidates.includes(id), unverified: true };
+  return true;
 }
 
 function addShipment(state, d) {
   const S = ensure(state);
   const id = String(d.id || '').trim();
   if (!id) throw Error('SHIPMENT_ID_REQUIRED');
-  if (S.items.some(s => s.id === id)) throw Error('SHIPMENT_EXISTS');
+  if (indexOf(S).id.has(id)) throw Error('SHIPMENT_EXISTS');
   const s = { id, route: d.route || '', cargo: d.cargo || '', client: d.client || '', provider: d.provider || '', clientDomain: String(d.clientDomain || '').toLowerCase(), providerDomain: String(d.providerDomain || '').toLowerCase(),
     exp: d.exp ? extract({ subject: d.exp }).exps[0] || d.exp : '', dua: String(d.dua || '').toUpperCase(), bultos: d.bultos != null && d.bultos !== '' ? Number(d.bultos) : null, kg: d.kg != null && d.kg !== '' ? Number(d.kg) : null,
     status: 'Abierto', events: [], mailIds: [], plates: [], created: d.created || new Date().toISOString() };
   S.items.push(s);
   // Reevalúa correos pendientes que ahora puedan ser identificables con certeza.
   for (const p of [...S.pending]) {
-    const m = S.mails.find(m => m.id === p.mailId), x = extract(m), cand = candidatesFor(S, x, m);
+    const m = indexOf(S).mailId.get(p.mailId); if (!m) continue;
+    const txt = (m.subject + ' ' + m.body).toUpperCase();
+    if (!((s.dua && txt.includes(s.dua)) || (s.exp && txt.includes(String(s.exp).toUpperCase())) || txt.includes(s.id.toUpperCase()))) continue;
+    const x = extract(m), cand = candidatesFor(S, x, m);
     const sure = cand.list.filter(l => l.sure);
-    if (sure.length === 1) { S.pending = S.pending.filter(q => q !== p); applyToShipment(S, m, x, S.items.find(i => i.id === sure[0].id), 'Identificado por ' + sure[0].hows.join(' y ') + ' al crear el envío.', true); }
+    if (sure.length === 1) { S.pending = S.pending.filter(q => q !== p); applyToShipment(S, m, x, indexOf(S).id.get(sure[0].id), 'Identificado por ' + sure[0].hows.join(' y ') + ' al crear el envío.', true); }
   }
   return s;
 }
@@ -234,6 +276,15 @@ function summarize(s) {
 function fmt(d) { try { return new Date(d).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', ''); } catch { return d; } }
 
 // Búsqueda: coincidencia exacta (DUA, expediente, matrícula, referencia) y por palabras.
+const HAY = new WeakMap();
+const clean = t => norm(t).replace(/[^a-z0-9ñ ]/g, ' ');
+function hayOf(s, m) {
+  let mh = HAY.get(m);
+  if (mh === undefined) { mh = clean([m.subject, m.body, m.from, (m.attachments || []).join(' ')].join(' ')); HAY.set(m, mh); }
+  let sh = HAY.get(s); const key = [s.id, s.exp, s.dua, s.client, s.provider].join(' ');
+  if (!sh || sh.key !== key) { sh = { key, h: clean(key) }; HAY.set(s, sh); }
+  return sh.h + ' ' + mh;
+}
 function search(state, q) {
   const S = ensure(state);
   const raw = String(q || '').trim();
@@ -249,8 +300,9 @@ function search(state, q) {
     const hits = [];
     const idQuery = x.duas.length || x.exps.length || x.refs.length;
     for (const id of idQuery ? [] : s.mailIds) {
-      const m = S.mails.find(m => m.id === id);
-      const hay = norm([s.id, s.exp, s.dua, s.client, s.provider, m.subject, m.body, m.from, (m.attachments || []).join(' ')].join(' ')).replace(/[^a-z0-9ñ ]/g, ' ');
+      const m = indexOf(S).mailId.get(id);
+      if (!m) continue;
+      const hay = hayOf(s, m);
       const hayCompact = hay.replace(/ /g, '');
       const plates = x.plates.concat(x.trailers);
       const okPlates = plates.every(p => hayCompact.includes(norm(p)));
@@ -306,10 +358,10 @@ const DEMO_INBOX = [
   { id: 'n6', threadId: 'th-x4', from: 'curso@formacion.example', subject: 'Curso de verano', date: '2026-11-26T17:15:00+01:00', body: 'Descubre nuestros cursos.' }
 ];
 
-return {ensure,blankShipments,demoState,DEMO_INBOX,ingestMail,confirmPending,addShipment,summarize,search,stats,fmt};})();
+return {ensure,blankShipments,demoState,DEMO_INBOX,ingestMail,confirmPending,addShipment,attachProposal,summarize,search,stats,fmt};})();
 
 // Pantalla «Envíos»: ficha viva por envío, pendientes de relacionar, búsqueda y alta manual.
-function shipmentsUI({ host, getState, save, esc, msg, demo }) {
+function shipmentsUI({ host, getState, save, esc, msg, demo, ai }) {
   const st = () => getState();
   let sub = 'list', sel = '', q = '';
   const tag = (t, c = '') => `<span class="tag ${c}">${esc(t)}</span>`;
@@ -368,8 +420,10 @@ ${(s.conflicts || []).length ? `<h3>Datos que no coinciden con la ficha</h3>${s.
   function pending() {
     const P = S.ensure(st()).pending;
     if (!P.length) return '<p>No hay correos pendientes de relacionar.</p>';
-    return P.map(p => { const m = mailById(p.mailId); return `<section class="line">${mailBlock(m)}${m.facts?.kind === 'rechazo' ? tag('Rechazo sin relacionar con seguridad', 'warn') : ''}<p><small>${esc(p.why)}</small></p>
-${p.candidates.map(c => `<button data-sh="confirm" data-mail="${esc(p.mailId)}" data-id="${esc(c)}">Es de ${esc(c)}</button>`).join('')}<button data-sh="discard" data-mail="${esc(p.mailId)}">Descartar</button></section>`; }).join('');
+    return P.map(p => { const m = mailById(p.mailId); const a = p.ai;
+      const aiBox = a ? `<div class="notice"><strong>Sugerencia de IA${a.simulated ? ' (SIMULACIÓN, sin llamar a ninguna IA)' : ''}, no verificada:</strong> ${a.shipmentId ? esc(a.shipmentId) : 'ningún envío con seguridad'} · confianza ${esc(a.confidence)}<br>${esc(a.reason)}${a.outsideRules ? '<br><small>No coincide con las pistas de las reglas: compruébalo con más cuidado.</small>' : ''}</div>` : '';
+      return `<section class="line">${mailBlock(m)}${m.facts?.kind === 'rechazo' ? tag('Rechazo sin relacionar con seguridad', 'warn') : ''}<p><small>Reglas: ${esc(p.why)}</small></p>${aiBox}
+${a?.shipmentId ? `<button class="primary" data-sh="confirm" data-via="ai" data-mail="${esc(p.mailId)}" data-id="${esc(a.shipmentId)}">Aceptar sugerencia: es de ${esc(a.shipmentId)}</button>` : ''}${p.candidates.filter(c => c !== a?.shipmentId).map(c => `<button data-sh="confirm" data-mail="${esc(p.mailId)}" data-id="${esc(c)}">Es de ${esc(c)}</button>`).join('')}${ai?.ready() && !a ? `<button data-sh="ask" data-mail="${esc(p.mailId)}">Pedir sugerencia a la IA</button>` : ''}<button data-sh="discard" data-mail="${esc(p.mailId)}">Descartar</button></section>`; }).join('');
   }
 
   function results() {
@@ -399,7 +453,8 @@ ${p.candidates.map(c => `<button data-sh="confirm" data-mail="${esc(p.mailId)}" 
       else if (a === 'back') { sub = q && S.search(st(), q)?.length ? 'search' : 'list'; sel = ''; }
       else if (a === 'demo') { const x = S.demoState().shipments; x.demo = true; x.demoCursor = 0; st().shipments = x; save(); msg('Ejemplo ficticio cargado.'); }
       else if (a === 'simulate') { const x = S.ensure(st()); const m = S.DEMO_INBOX[x.demoCursor || 0]; if (!m) return; x.demoCursor = (x.demoCursor || 0) + 1; const r = S.ingestMail(st(), m); save(); msg(r.status === 'linked' ? `Correo añadido a ${r.shipmentId}. ${r.why}` : r.status === 'pending' ? 'Correo pendiente: ' + r.why : r.status === 'ignored' ? 'Correo sin relación con ningún envío.' : r.why); }
-      else if (a === 'confirm') { S.confirmPending(st(), d.mail, d.id); save(); msg(`Correo añadido a ${d.id} con su fuente.`); }
+      else if (a === 'ask') { const x = S.ensure(st()), m = mailById(d.mail); msg('Consultando a la IA…'); const r = await ai.ask({ subject: m.subject, body: m.body, from: m.from }, x.items.filter(i => i.status !== 'Entregado')); if (r.error) throw Error('IA: ' + r.error); S.attachProposal(st(), d.mail, r) ? msg('Sugerencia recibida. Es solo una propuesta: tú decides.') : msg('La IA devolvió un envío no válido; se ignora.'); save(); }
+      else if (a === 'confirm') { S.confirmPending(st(), d.mail, d.id, d.via); save(); msg(`Correo añadido a ${d.id} con su fuente.`); }
       else if (a === 'discard') { S.confirmPending(st(), d.mail, null); save(); msg('Correo descartado.'); }
       else if (a === 'create') { const v = k => host.querySelector('#ns-' + k)?.value.trim() || ''; S.addShipment(st(), { id: v('id'), route: v('route'), client: v('client'), clientDomain: v('clientDomain'), provider: v('provider'), providerDomain: v('providerDomain'), exp: v('exp'), dua: v('dua'), bultos: v('bultos'), kg: v('kg') }); save(); sub = 'list'; msg('Envío creado.'); }
       paint();
@@ -419,7 +474,9 @@ ${p.candidates.map(c => `<button data-sh="confirm" data-mail="${esc(p.mailId)}" 
 
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let disposeIntegration;
-const served=location.protocol==='http:'&&['localhost','127.0.0.1'].includes(location.hostname);let liveMode=false;if(served)fetch('/api/status',{credentials:'same-origin'}).then(r=>r.json()).then(t=>{liveMode=!!t.graphConfigured&&!t.mock;if(liveMode)render();}).catch(()=>{});
+const served=location.protocol==='http:'&&['localhost','127.0.0.1'].includes(location.hostname);let liveMode=false;if(served)fetch('/api/status',{credentials:'same-origin'}).then(r=>r.json()).then(t=>{liveMode=!!t.graphConfigured&&!t.mock;aiReady=!!t.aiProposer?.ready;if(liveMode)render();}).catch(()=>{});
+let aiReady=false;
+async function askAi(mail,shipments){const st=await(await fetch('/api/status',{credentials:'same-origin'})).json();const r=await fetch('/api/shipments/propose',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','x-csrf-token':st.csrf},body:JSON.stringify({confirm:true,mail,shipments})});return await r.json();}
 let workspaceRevision=0,csrf='',actor='Coordinador',saving=false;
 async function workspace(action){if(!served)return;const out=$('#workspace-status');try{if(action==='save'){if(saving)return;saving=true;const r=await fetch('/api/workspace',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify({revision:workspaceRevision,state})});const j=await r.json();if(!r.ok)throw Error(j.error);workspaceRevision=j.revision;}else{const st=await(await fetch('/api/status',{credentials:'same-origin'})).json();csrf=st.csrf;const r=await fetch('/api/workspace',{credentials:'same-origin'});if(!r.ok)throw Error('No se pudo cargar el espacio');const j=await r.json();state=j.state;workspaceRevision=j.revision;selected=state.cases[0]?.id||'';render();}out.textContent='Servidor local: revisión '+workspaceRevision+'. Cambios compartidos solo al guardar. No hay autenticación de producción.';}catch(e){out.textContent=e.message==='REVISION_CONFLICT_RELOAD_BEFORE_EDITING'?'Otra sesión guardó cambios. Exporta tus cambios locales y recarga, no se ha sobrescrito el servidor.':e.message;}finally{saving=false;}}
 let state=C.blank(),selected='',view='cases';
@@ -430,7 +487,7 @@ function msg(t){$('#message').textContent=t;$('#message').hidden=false;}
 function download(name,text,type='application/json'){const u=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),2000);}
 function status(c){return {draft:'En preparación',reviewed:'Revisado · demo',assigned:'Asignado · aviso local'}[c.status];}
 function render(){disposeIntegration?.();disposeIntegration=null;save();$('#nav').innerHTML=['cases','shipments','inbox','knowledge','connections','automation'].map((v,i)=>`<button class="${view===v?'on':''}" data-view="${v}">${['Expedientes','Envíos','Avisos y borradores','Conocimiento','Conexiones','Automatización'][i]}</button>`).join('');
- if(view==='shipments')disposeIntegration=shipmentsUI({host:$('#content'),getState:()=>state,save,esc,msg,demo:!liveMode});if(view==='automation')renderAutomation();if(view==='cases')renderCases();if(view==='inbox')renderInbox();if(view==='knowledge')renderKnowledge();if(view==='connections')renderConnections();}
+ if(view==='shipments')disposeIntegration=shipmentsUI({host:$('#content'),getState:()=>state,save,esc,msg,demo:!liveMode,ai:{ready:()=>aiReady,ask:askAi}});if(view==='automation')renderAutomation();if(view==='cases')renderCases();if(view==='inbox')renderInbox();if(view==='knowledge')renderKnowledge();if(view==='connections')renderConnections();}
 function renderCases(){const c=get();$('#content').innerHTML=`<section class="toolbar"><button class="primary" data-action="new">Crear expediente</button>${liveMode?'':'<button data-action="sample">Cargar ejemplo ficticio</button>'}<button data-action="backup">Exportar datos locales</button></section><div class="layout"><aside><h2>Tu bandeja</h2>${state.cases.filter(x=>actor==='Coordinador'||x.agent===actor||x.routing?.agent===actor).map(x=>`<button class="case ${selected===x.id?'selected':''}" data-case="${x.id}"><strong>${esc(x.title)}</strong><span>${esc(status(x))}</span><small>${x.lines.length} líneas · ${esc(x.agent||x.routing?.agent||'Sin responsable')}</small></button>`).join('')||'<p>No hay expedientes. Crea uno o carga el ejemplo.</p>'}</aside><article>${c?detail(c):'<h2>Del documento a la revisión</h2><p>Crea un expediente, importa líneas CSV o añádelas a mano, propone códigos desde referencias y revisa antes de asignar.</p><div class="notice">Solo datos ficticios. No conecta cuentas ni presenta o envía documentos. Los motores de proveedor no están integrados.</div>'}</article></div>`;}
 function detail(c){const t=C.totals(c),i=C.issues(c);return `<div class="heading"><div><span class="badge">${esc(status(c))}</span><h2>${esc(c.title)}</h2><p>${esc(c.provider)} · ${esc(c.agent||'Sin asignar')}</p></div><button data-action="dossier">Descargar expediente JSON</button></div><div class="notice">DEMO NO DECLARABLE. Un formato HS correcto no prueba que exista o sea aplicable. Los documentos son ficticios. Los candidatos oficiales acotados no equivalen a clasificación legal ni TARIC10.</div><div class="fields"><label>Nombre<input data-field="title" value="${esc(c.title)}"></label><label>Perfil<select data-field="provider">${[...new Set([c.provider,'Formato genérico','Motor proveedor A pendiente','Motor proveedor B pendiente'])].map(x=>`<option ${x===c.provider?'selected':''}>${x}</option>`).join('')}</select></label><label>Valor esperado (EUR)<input type="number" min="0" step="0.01" data-field="expectedValue" value="${esc(c.expectedValue)}"></label><label>Peso neto esperado (kg)<input type="number" min="0" step="0.01" data-field="expectedNet" value="${esc(c.expectedNet)}"></label></div>${c.preparation?preparationView(c):''}<h3>Líneas del expediente</h3><div class="actions"><button data-action="add-line">Añadir línea</button><button data-action="csv-in">Importar CSV</button><button data-action="csv-template">Plantilla ficticia CSV</button>${!c.automation?'<button data-action="propose">Proponer HS desde referencias locales</button>':''}</div><p class="muted">Coincidencia exacta de descripción + material. Sin coincidencia o con contradicción: queda pendiente. Nunca asigna un código por intuición.</p>${c.lines.map((l,n)=>`<section class="line"><h4>Línea ${n+1} · ${esc(l.ref||'Sin referencia')}</h4>${l.decision?decisionView(l):''}<div class="fields">${[['ref','Referencia'],['description','Descripción'],['material','Material'],['hs','HS propuesto / revisado'],['value','Valor EUR'],['net','Neto kg'],['source','Fuente / fila']].map(([k,label])=>`<label>${label}<input data-line="${l.id}" data-key="${k}" value="${esc(l[k])}" ${['value','net'].includes(k)?'type="number" min="0" step="0.01"':''}></label>`).join('')}</div>${l.proposal?`<p class="notice">${esc(l.proposal)}</p>`:''}<label class="check"><input type="checkbox" data-confirm="${l.id}" ${l.confirmed?'checked':''}>He revisado esta línea (demostración)</label><button data-remove="${l.id}">Quitar línea</button></section>`).join('')||'<p>Sin líneas.</p>'}<h3>Documentos y observaciones</h3><label>Añadir documento de texto ficticio (.txt)<input type="file" id="docfile" accept=".txt"></label><p class="muted">Se guarda su contenido en este navegador y en las exportaciones. No añadas documentos reales a esta demo.</p>${c.documents.map(d=>`<p>${esc(d.name)} · ${d.text.length} caracteres</p>`).join('')}<label>Notas<textarea data-field="notes">${esc(c.notes)}</textarea></label><div class="totals"><span>Valor calculado <strong>${t.value.toFixed(2)} EUR</strong></span><span>Neto calculado <strong>${t.net.toFixed(2)} kg</strong></span></div><h3>Revisión</h3>${i.length?`<ul class="warnings">${i.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:'<p class="ok">'+(c.reviewedAt?'Revisión de demostración registrada.':'Comprobaciones locales superadas. Falta confirmar la revisión humana.')+'</p>'}<div class="actions"><button class="primary" data-action="review">Confirmar revisión del expediente</button><select id="agent"><option value="">Elegir responsable ficticio</option><option>Operador A</option><option>Operador B</option></select><button data-action="assign">Asignar y crear aviso local</button><button data-action="draft">Preparar borrador</button><button data-action="csv-out">Exportar líneas CSV</button></div><h3>Trazabilidad</h3><ul>${c.audit.map(a=>`<li>${esc(new Date(a.at).toLocaleString('es-ES'))} · ${esc(a.action)}</li>`).join('')}</ul>`;}
 function renderInbox(){$('#content').innerHTML=`<h2>Avisos y borradores</h2><div class="notice">Avisos dentro de la app. En modo servidor se comparten al guardar y recargar el espacio. No se envían correos ni notificaciones externas.</div><h3>Avisos de asignación</h3>${state.notices.filter(n=>actor==='Coordinador'||n.to===actor).map(n=>`<section class="line"><strong>${esc(n.to)}</strong><p>${esc(n.text)}</p>${!state.cases.find(c=>c.id===n.caseId)?.reviewedAt?'<p class="notice">Aviso desactualizado: expediente modificado, pendiente de nueva revisión.</p>':''}<span class="badge">${n.read?'Leído localmente':'Sin leer localmente'}</span><button data-read="${n.id}">Marcar leído</button></section>`).join('')||'<p>No hay avisos.</p>'}<h3>Borradores para revisión</h3>${state.drafts.map(d=>`<section class="line"><label>Destinatario ficticio<input data-draft="${d.id}" data-dkey="to" value="${esc(d.to)}"></label><label>Asunto<input data-draft="${d.id}" data-dkey="subject" value="${esc(d.subject)}"></label><label>Cuerpo<textarea data-draft="${d.id}" data-dkey="body">${esc(d.body)}</textarea></label><p>Estado: ${state.cases.find(c=>c.id===d.caseId)?.reviewedAt?'borrador local, no enviado':'desactualizado: expediente modificado, volver a revisar'}.</p><button data-download-draft="${d.id}">Descargar borrador TXT</button></section>`).join('')||'<p>No hay borradores.</p>'}`;}
