@@ -45,3 +45,6 @@ No probado: PDF de cientos de páginas ni PDF malformados de forma maliciosa má
 
 ## Versión de Node
 Mínimo real: Node 22.13.0 (o 24). Lo pide `package.json` (`engines`), el servidor se niega a arrancar con una versión menor (`NODE_TOO_OLD`, `tests/runtime-check.test.mjs`) y el Dockerfile falla al construir si el tag resuelve a algo anterior (no validado: Docker no está disponible aquí).
+
+## Gestión de usuarios y aviso de alerta en pantalla
+Un administrador ve arriba el panel "Usuarios (administración)": lista, crear y borrar (`/api/users`, solo rol admin, comprobación de origen; nunca devuelve claves ni sales; no deja borrar el último administrador; borrar a alguien cierra sus sesiones). Si el receptor de correo se detiene, todos los usuarios ven un aviso rojo con el código y la acción. Probado por HTTP con sesiones admin y operador (`tests/server-auth.test.mjs`) y con captura de la interfaz real. En la captura el aviso rojo está forzado en el navegador (no hay Graph real aquí). Sin cambiar claves ni roles de usuarios existentes todavía: hay que borrar y crear de nuevo. El panel no se muestra en el HTML autónomo, solo servido por el servidor.
