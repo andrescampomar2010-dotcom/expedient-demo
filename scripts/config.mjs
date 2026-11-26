@@ -36,6 +36,7 @@ export function buildEnv(a) {
     'INTEGRATION_MOCK=false',
     `APP_DATA_PATH=${useMs ? 'data/real.json' : 'data/local.json'}`, `MAIL_INTAKE_ENABLED=${on}`, `MAIL_INTAKE_APPROVED=${on}`,
     `MAIL_FOLDER_ID=${on ? a.folder : ''}`, `MAIL_START_AFTER=${on ? a.since : ''}`, 'MAIL_POLL_MINUTES=60',
+    `MAIL_SENT_FOLDER_ID=${on ? (a.sentFolder || '') : ''}`, `OWN_MAIL_DOMAINS=${a.ownDomains || ''}`, `AI_PROPOSER_ENABLED=${useClaude && a.aiProposer === true}`, 'AI_PROPOSER_AUTO=false', 'AI_PROPOSER_MAX_PER_DAY=20',
   ];
   return { errors, text: lines.join('\n') + '\n' };
 }
@@ -60,5 +61,8 @@ export function validateConfig(env) {
       ? add('warn', `Claude activado (modelo ${env.CLAUDE_MODEL}, clave presente, no mostrada): cada análisis confirmado consume tu API de pago y envía ese texto a Anthropic`)
       : add('fail', 'Claude activado sin clave, modelo o aprobación de datos');
   } else add('ok', 'Claude apagado (no se envía nada a Anthropic)');
+  if (env.AI_PROPOSER_ENABLED === 'true') add(env.CLAUDE_ENABLED === 'true' ? 'warn' : 'fail', env.CLAUDE_ENABLED === 'true' ? `Sugerencias de IA activadas (${env.AI_PROPOSER_AUTO === 'true' ? 'automáticas' : 'solo al pulsar'}, máx. ${env.AI_PROPOSER_MAX_PER_DAY || 20}/día): se envía a Anthropic el asunto y cuerpo del correo pendiente y los datos básicos de envíos abiertos, nunca DUA ni adjuntos` : 'AI_PROPOSER_ENABLED requiere Claude configurado');
+  else add('ok', 'Sugerencias de IA apagadas');
+  if (env.MAIL_SENT_FOLDER_ID && env.MAIL_INTAKE_ENABLED !== 'true') add('fail', 'MAIL_SENT_FOLDER_ID requiere el receptor activado');
   return r;
 }
