@@ -3,6 +3,9 @@
 main{overflow-wrap:anywhere}pre{max-width:100%;overflow-wrap:anywhere}header>div{min-width:0}@media(max-width:360px){header{flex-wrap:wrap}header .tag{max-width:none}h1{font-size:29px}.line{padding:14px}button{max-width:100%}}
 pre{white-space:pre-wrap;word-break:break-word}
 main.setup{max-width:720px;margin:2rem auto;padding:0 1rem;line-height:1.5}main.setup input:not([type=checkbox]){max-width:100%}
+
+.line.click{cursor:pointer}.line.click:hover{background:var(--wash)}.line.hit{border-left:4px solid #e0a800}.tag.warn{background:#fde8e0;color:#a03a14}.tag.ok{background:#e1f4e6;color:#1d6b35}
+main .tag{display:inline-block;margin:2px 4px 2px 0;padding:1px 9px;border-radius:10px;background:var(--wash);color:var(--teal);font-size:12.5px;font-weight:600}main .tag.warn{background:#fde8e0;color:#a03a14}main .tag.ok{background:#e1f4e6;color:#1d6b35}
 </style></head><body><header><div><span class="eyebrow">DEMO LOCAL · DATOS FICTICIOS</span><h1>Expedient</h1><p>Preparar. Revisar. Asignar.</p></div><span class="tag">Sin conexión externa</span></header><nav id="nav"></nav><p id="message" role="status" hidden></p><section id="workspace-bar" class="line" hidden><label>Rol ficticio, filtro de bandeja, no inicio de sesión<select id="actor"><option>Coordinador</option><option>Operador A</option><option>Operador B</option></select></label><button data-workspace="save">Guardar espacio en servidor</button><button data-workspace="load">Recargar espacio del servidor</button><p id="workspace-status" role="status"></p><p>Servidor de demostración solo localhost. Todos sus usuarios locales tienen acceso al mismo espacio. No es un control de permisos.</p></section><main id="content"></main><input type="file" id="csvfile" accept=".csv" hidden><footer>Demostración de flujo documental. No presenta declaraciones, no envía correos y no valida clasificación aduanera. Todo lo que añadas se guarda en este navegador.</footer><script>const C=(()=>{const VERSION='0.1.0';
 const uid=()=>globalThis.crypto.randomUUID();
 function blank(){return {version:VERSION,cases:[],notices:[],drafts:[],knowledge:[],history:[]};}
@@ -30,6 +33,388 @@ function integrationUI({host,esc,initialPreview,onImport,onKnowledge,onAnalysis}
  host.addEventListener('click',click);render();return ()=>{host.removeEventListener('click',click);host.removeEventListener('input',capture);};
 }
 
+const S=(()=>{// Envíos: agrupa correos por envío, mantiene una ficha viva y un resumen con fuente.
+// Lógica pura (sin red): la usan el servidor, el navegador y las pruebas.
+// Reglas deterministas. Una IA opcional solo podría PROPONER; esta lógica comprueba referencias.
+
+const SHIPMENTS_VERSION = 1;
+const GESTION_KINDS = new Set(['dua_presentado', 'subsanacion', 'documentacion', 'pedido_matriculas', 'gestion']);
+
+const KIND_LABEL = {
+  rechazo: 'Rechazo de aduana recibido',
+  dua_presentado: 'DUA presentado',
+  subsanacion: 'Subsanación enviada',
+  levante: 'Levante / autorización recibida',
+  matriculas: 'Matrículas recibidas',
+  correccion: 'Corrección de datos recibida',
+  entrega: 'Entrega confirmada',
+  documentacion: 'Documentación',
+  pedido_matriculas: 'Matrículas solicitadas',
+  gestion: 'Gestión nuestra',
+  info: 'Información recibida'
+};
+
+function blankShipments() {
+  return { version: SHIPMENTS_VERSION, items: [], mails: [], pending: [], ownDomains: [] };
+}
+function ensure(state) {
+  if (!state.shipments || state.shipments.version !== SHIPMENTS_VERSION) state.shipments = blankShipments();
+  return state.shipments;
+}
+
+const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const plateKey = s => String(s).toUpperCase().replace(/[^A-Z0-9]/g, '');
+const num = s => Number(String(s).replace(/\./g, '').replace(',', '.'));
+const domainOf = a => String(a || '').toLowerCase().split('@').pop().trim();
+const ts = d => Date.parse(d) || 0;
+
+function extract(mail) {
+  const text = `${mail.subject || ''}\n${mail.body || ''}\n${(mail.attachments || []).join(' ')}`;
+  const duas = [...new Set((text.match(/\b\d{2}[A-Za-z]{2}\d{10,16}[A-Za-z]?\b/g) || []).map(x => x.toUpperCase()))];
+  const exps = [...new Set([...text.matchAll(/\bEXP[-\s]?(\d{4})[-\s]?(\d{1,3})\b/gi)].map(m => `EXP-${m[1]}-${m[2].padStart(2, '0')}`))];
+  const refs = [...new Set((text.match(/\bTR-\d{3,5}\b/gi) || []).map(x => x.toUpperCase()))];
+  const plates = [...new Set([...text.matchAll(/(?<![A-Za-z]-?)\b(\d{4})[\s-]?([BCDFGHJKLMNPRSTVWXYZ]{3})\b/gi)].map(m => (m[1] + m[2]).toUpperCase()))];
+  const trailers = [...new Set([...text.matchAll(/\bR-?(\d{4})-?([A-Z]{3})\b/gi)].map(m => ('R' + m[1] + m[2]).toUpperCase()))];
+  const b = text.match(/(\d[\d.]*)\s*bultos/i), k = text.match(/(\d[\d.]*(?:,\d+)?)\s*kg\b/i);
+  return { duas, exps, refs, plates, trailers, bultos: b ? num(b[1]) : null, kg: k ? num(k[1]) : null, kind: classify(mail) };
+}
+
+function classify(mail) {
+  const t = norm(`${mail.subject || ''} ${mail.body || ''}`);
+  const out = mail.direction === 'out';
+  if (out && /subsan|reenvi/.test(t)) return 'subsanacion';
+  if (/rechaz|denegad|error en (la )?(declaracion|partida|codigo)/.test(t)) return 'rechazo';
+  if (/subsan|corregid[oa] y reenvi|reenviamos (la )?(declaracion|dua)/.test(t)) return out ? 'subsanacion' : 'info';
+  if (/levante|autorizad[oa] (la )?(salida|declaracion)/.test(t)) return 'levante';
+  if (/dua presentad|declaracion presentad|presentamos (el|la) (dua|declaracion)/.test(t)) return out ? 'dua_presentado' : 'info';
+  if (/correccion|corrige|cambia el camion|nueva matricula/.test(t)) return 'correccion';
+  if (/matricula|camion asignado|remolque/.test(t)) return out ? 'pedido_matriculas' : 'matriculas';
+  if (/entregad[oa]/.test(t)) return 'entrega';
+  if (/adjunt|documentacion|documento/.test(t)) return out ? 'documentacion' : 'info';
+  return out ? 'gestion' : 'info';
+}
+
+function openShipments(S) { return S.items.filter(s => s.status !== 'Entregado'); }
+const byNum = (a, b) => (a != null && b != null && a === b);
+
+function candidatesFor(S, x, mail) {
+  const found = new Map();
+  const add = (s, how, sure) => { const p = found.get(s.id); if (!p) found.set(s.id, { id: s.id, hows: [how], sure }); else { p.hows.push(how); p.sure = p.sure || sure; } };
+  for (const s of S.items) {
+    if (x.duas.includes(s.dua)) add(s, `número de DUA ${s.dua}`, true);
+    if (x.exps.includes(s.exp)) add(s, `expediente ${s.exp}`, true);
+    if (x.refs.includes(s.id)) add(s, `referencia ${s.id}`, true);
+    const prev = mail.threadId && S.mails.find(m => m.threadId === mail.threadId && m.shipmentId === s.id);
+    if (prev) add(s, 'misma conversación de correo', true);
+  }
+  if (found.size) return { sure: true, list: [...found.values()] };
+  const weak = new Map();
+  const addW = (s, how) => { const p = weak.get(s.id); if (!p) weak.set(s.id, { id: s.id, hows: [how], sure: false }); else p.hows.push(how); };
+  const open = openShipments(S);
+  if (x.bultos != null && x.kg != null) for (const s of open) if (byNum(x.bultos, s.bultos) && byNum(x.kg, s.kg)) addW(s, `bultos (${x.bultos}) y kilos (${x.kg}) coinciden`);
+  const dom = domainOf(mail.from);
+  if (dom) for (const s of open) if (dom === s.clientDomain || dom === s.providerDomain) addW(s, `remitente del dominio ${dom}`);
+  for (const s of open) { const pl = [...x.plates, ...x.trailers]; if (pl.length && (s.plates || []).some(p => pl.includes(p.value))) addW(s, 'matrícula ya vista en este envío'); }
+  return { sure: false, list: [...weak.values()] };
+}
+
+function makeEvent(mail, x, shipment) {
+  const kind = x.kind;
+  const side = mail.direction === 'out' && GESTION_KINDS.has(kind) ? 'gestion' : 'info';
+  const label = KIND_LABEL[kind] || KIND_LABEL.info;
+  return {
+    id: 'ev-' + mail.id, date: mail.date, side, kind, rejection: kind === 'rechazo',
+    text: side === 'info' && kind === 'info' ? mail.subject : label,
+    mailId: mail.id,
+    source: `Correo ${fmt(mail.date)} de ${mail.from}: «${mail.subject}»`
+  };
+}
+
+function applyToShipment(S, mail, x, shipment, how, sure) {
+  mail.shipmentId = shipment.id; mail.how = how; mail.sure = sure;
+  const ev = makeEvent(mail, x, shipment);
+  if (!sure) { ev.text += ' (relación confirmada por ti)'; }
+  // Datos nuevos: nunca se borran los anteriores; si contradicen, se marca corrección.
+  const conflicts = [];
+  for (const [field, val, label] of [['bultos', x.bultos, 'bultos'], ['kg', x.kg, 'kg']]) {
+    if (val != null && shipment[field] != null && val !== shipment[field] && x.kind !== 'rechazo' ) conflicts.push(`${label}: ficha ${shipment[field]}, correo ${val}`);
+  }
+  if (conflicts.length) { shipment.conflicts = [...(shipment.conflicts || []), { mailId: mail.id, date: mail.date, text: conflicts.join('; ') }]; ev.text += ' · dato distinto al de la ficha'; }
+  shipment.plates ||= [];
+  for (const p of [...x.plates.map(v => ({ value: v, role: 'camión' })), ...x.trailers.map(v => ({ value: v, role: 'remolque' }))]) {
+    const sameRole = shipment.plates.filter(q => q.role === p.role);
+    const cur = sameRole.sort((a, b) => ts(b.date) - ts(a.date))[0];
+    if (!cur || cur.value !== p.value) {
+      shipment.plates.push({ ...p, date: mail.date, mailId: mail.id, replaces: cur?.value || null });
+      if (cur) { ev.kind = 'correccion'; ev.text = `Corrección: ${p.role} ${cur.value} pasa a ${p.value}`; ev.corrects = cur.value; }
+    }
+  }
+  shipment.events.push(ev); shipment.events.sort((a, b) => ts(a.date) - ts(b.date));
+  shipment.mailIds = [...new Set([...(shipment.mailIds || []), mail.id])];
+  if (ev.kind === 'entrega') shipment.status = 'Entregado';
+  return ev;
+}
+
+// Entra un correo. Devuelve {status, shipmentId?, candidates?, why}.
+function ingestMail(state, mailIn) {
+  const S = ensure(state);
+  const mail = { attachments: [], ...mailIn };
+  if (!mail.id || !mail.date) throw Error('MAIL_NEEDS_ID_AND_DATE');
+  if (S.mails.some(m => m.id === mail.id)) return { status: 'duplicate', why: 'Este correo ya estaba registrado.' };
+  mail.direction ||= (S.ownDomains || []).includes(domainOf(mail.from)) ? 'out' : 'in';
+  const x = extract(mail);
+  mail.body = String(mail.body || '').slice(0, 20000);
+  mail.facts = { duas: x.duas, exps: x.exps, bultos: x.bultos, kg: x.kg, kind: x.kind };
+  const c = candidatesFor(S, x, mail);
+  const sure = c.list.filter(l => l.sure);
+  const record = () => { S.mails.push(mail); };
+  if (sure.length === 1) {
+    const s = S.items.find(i => i.id === sure[0].id);
+    const how = 'Identificado por ' + sure[0].hows.join(' y ') + (x.bultos != null && byNum(x.bultos, s.bultos) && byNum(x.kg, s.kg) ? '; bultos y kilos también coinciden' : '') + '.';
+    record(); applyToShipment(S, mail, x, s, how, true);
+    return { status: 'linked', shipmentId: s.id, why: how, sure: true };
+  }
+  if (sure.length > 1) {
+    mail.shipmentId = null; record();
+    const p = { mailId: mail.id, candidates: sure.map(l => l.id), why: 'Referencias contradictorias: apuntan a ' + sure.map(l => l.id).join(' y ') + '. Elige tú.' };
+    S.pending.push(p); return { status: 'pending', ...p };
+  }
+  mail.shipmentId = null; record();
+  if (!c.list.length) {
+    if (!x.duas.length && !x.exps.length && !x.refs.length && !x.plates.length) { mail.ignored = true; return { status: 'ignored', why: 'No coincide con ningún envío, cliente ni proveedor.' }; }
+    const p = { mailId: mail.id, candidates: [], why: 'Trae referencias, pero ningún envío conocido las tiene. Revísalo o crea el envío.' };
+    S.pending.push(p); return { status: 'pending', ...p };
+  }
+  const p = { mailId: mail.id, candidates: c.list.map(l => l.id), hints: Object.fromEntries(c.list.map(l => [l.id, l.hows])),
+    why: (x.kind === 'rechazo' ? 'Rechazo sin DUA ni expediente. ' : 'Sin referencia exacta. ') + 'Posible coincidencia, no es segura (' + c.list.map(l => l.id + ': ' + l.hows.join(', ')).join(' | ') + '). Otros envíos podrían compartir esos datos.' };
+  S.pending.push(p); return { status: 'pending', ...p };
+}
+
+function confirmPending(state, mailId, shipmentId) {
+  const S = ensure(state);
+  const i = S.pending.findIndex(p => p.mailId === mailId);
+  if (i < 0) throw Error('NOT_PENDING');
+  const mail = S.mails.find(m => m.id === mailId);
+  if (shipmentId === null) { S.pending.splice(i, 1); mail.ignored = true; mail.how = 'Descartado por ti.'; return { discarded: true }; }
+  const s = S.items.find(s => s.id === shipmentId);
+  if (!s) throw Error('UNKNOWN_SHIPMENT');
+  const x = extract(mail);
+  S.pending.splice(i, 1);
+  applyToShipment(S, mail, x, s, 'Confirmado por ti.', false);
+  return { shipmentId };
+}
+
+function addShipment(state, d) {
+  const S = ensure(state);
+  const id = String(d.id || '').trim();
+  if (!id) throw Error('SHIPMENT_ID_REQUIRED');
+  if (S.items.some(s => s.id === id)) throw Error('SHIPMENT_EXISTS');
+  const s = { id, route: d.route || '', cargo: d.cargo || '', client: d.client || '', provider: d.provider || '', clientDomain: String(d.clientDomain || '').toLowerCase(), providerDomain: String(d.providerDomain || '').toLowerCase(),
+    exp: d.exp ? extract({ subject: d.exp }).exps[0] || d.exp : '', dua: String(d.dua || '').toUpperCase(), bultos: d.bultos != null && d.bultos !== '' ? Number(d.bultos) : null, kg: d.kg != null && d.kg !== '' ? Number(d.kg) : null,
+    status: 'Abierto', events: [], mailIds: [], plates: [], created: d.created || new Date().toISOString() };
+  S.items.push(s);
+  // Reevalúa correos pendientes que ahora puedan ser identificables con certeza.
+  for (const p of [...S.pending]) {
+    const m = S.mails.find(m => m.id === p.mailId), x = extract(m), cand = candidatesFor(S, x, m);
+    const sure = cand.list.filter(l => l.sure);
+    if (sure.length === 1) { S.pending = S.pending.filter(q => q !== p); applyToShipment(S, m, x, S.items.find(i => i.id === sure[0].id), 'Identificado por ' + sure[0].hows.join(' y ') + ' al crear el envío.', true); }
+  }
+  return s;
+}
+
+function summarize(s) {
+  const last = side => s.events.filter(e => e.side === side).sort((a, b) => ts(b.date) - ts(a.date))[0] || null;
+  const lastGestion = last('gestion'), lastInfo = last('info');
+  const rej = s.events.filter(e => e.rejection).sort((a, b) => ts(b.date) - ts(a.date))[0] || null;
+  const resolved = rej && s.events.some(e => ts(e.date) > ts(rej.date) && (e.side === 'gestion' || e.kind === 'levante'));
+  return { lastGestion, lastInfo, rejectionOpen: !!rej && !resolved, rejection: rej,
+    plateNow: ['camión', 'remolque'].map(r => (s.plates || []).filter(p => p.role === r).sort((a, b) => ts(b.date) - ts(a.date))[0]).filter(Boolean) };
+}
+
+function fmt(d) { try { return new Date(d).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', ''); } catch { return d; } }
+
+// Búsqueda: coincidencia exacta (DUA, expediente, matrícula, referencia) y por palabras.
+function search(state, q) {
+  const S = ensure(state);
+  const raw = String(q || '').trim();
+  if (!raw) return null;
+  const x = extract({ subject: raw, body: '' });
+  const words = norm(raw).replace(/[^a-z0-9ñ ]/g, ' ').split(/\s+/).filter(w => w.length > 1 && !['de', 'del', 'la', 'el', 'los', 'las', 'un', 'una', 'que', 'en', 'con'].includes(w));
+  const out = [];
+  for (const s of S.items) {
+    const exact = [];
+    if (x.duas.includes(s.dua)) exact.push('DUA');
+    if (x.exps.includes(s.exp)) exact.push('expediente');
+    if (x.refs.includes(s.id)) exact.push('referencia');
+    const hits = [];
+    const idQuery = x.duas.length || x.exps.length || x.refs.length;
+    for (const id of idQuery ? [] : s.mailIds) {
+      const m = S.mails.find(m => m.id === id);
+      const hay = norm([s.id, s.exp, s.dua, s.client, s.provider, m.subject, m.body, m.from, (m.attachments || []).join(' ')].join(' ')).replace(/[^a-z0-9ñ ]/g, ' ');
+      const hayCompact = hay.replace(/ /g, '');
+      const plates = x.plates.concat(x.trailers);
+      const okPlates = plates.every(p => hayCompact.includes(norm(p)));
+      const plateParts = new Set(plates.flatMap(p => [p.slice(0, 4).toLowerCase(), p.slice(-3).toLowerCase(), p.toLowerCase()]));
+      const rest = words.filter(w => !plateParts.has(w) && !/^r$/.test(w));
+      if (okPlates && rest.every(w => hay.includes(w.length > 4 ? w.replace(/(es|s)$/, '') : w))) hits.push(m.id);
+    }
+    const exactHit = exact.length > 0;
+    if (exactHit || hits.length) out.push({ shipmentId: s.id, exact, hits: exactHit ? s.mailIds : hits, onlyIdentifier: exactHit });
+  }
+  return out;
+}
+
+function stats(state) {
+  const S = ensure(state);
+  return { shipments: S.items.length, mails: S.mails.length, pending: S.pending.length,
+    openRejections: S.items.filter(s => summarize(s).rejectionOpen).length };
+}
+
+// ---- Datos ficticios para la demo ----
+const own = 'operaciones@empresa.example';
+const DEMO_OWN_DOMAIN = 'empresa.example';
+function demoState() {
+  const state = { shipments: blankShipments() };
+  state.shipments.ownDomains = [DEMO_OWN_DOMAIN];
+  const base = [
+    { id: 'TR-0412', route: 'Depósito Valencia → Depósito Zaragoza', cargo: 'Camión, 18 palés', client: 'Cliente Norte S.L.', provider: 'Transportes Ejemplo Sur', clientDomain: 'clientenorte.example', providerDomain: 'ejemplosur.example', exp: 'EXP-2611-07', dua: '26ES0000123456', bultos: 18, kg: 9450 },
+    { id: 'TR-0415', route: 'Depósito Valencia → Depósito Madrid', cargo: 'Camión, 12 palés', client: 'Cliente Norte S.L.', provider: 'Fletes Demo Centro', clientDomain: 'clientenorte.example', providerDomain: 'fletesdemo.example', exp: 'EXP-2611-09', dua: '26ES0000234567', bultos: 12, kg: 7800 },
+    { id: 'TR-0398', route: 'Depósito Bilbao → Depósito Sevilla', cargo: "Contenedor 40'", client: 'Importaciones Modelo S.A.', provider: 'Transportes Ejemplo Sur', clientDomain: 'modelo.example', providerDomain: 'ejemplosur.example', exp: 'EXP-2611-03', dua: '26ES0000345678', bultos: 240, kg: 21300 },
+    { id: 'TR-0421', route: 'Depósito Valencia → Depósito Barcelona', cargo: 'Camión, 12 palés', client: 'Importaciones Modelo S.A.', provider: 'Fletes Demo Centro', clientDomain: 'modelo.example', providerDomain: 'fletesdemo.example', exp: 'EXP-2611-11', dua: '26ES0000456789', bultos: 12, kg: 7800 }
+  ];
+  for (const d of base) addShipment(state, { ...d, created: '2026-11-19T08:00:00+01:00' });
+  DEMO_HISTORY.forEach(m => ingestMail(state, m));
+  return state;
+}
+const DEMO_HISTORY = [
+  { id: 'd1', threadId: 'th-412', from: 'ana@clientenorte.example', subject: 'Carga TR-0412 martes', date: '2026-11-24T09:12:00+01:00', body: 'Confirmamos carga el martes a las 8:00. Os mandamos matrículas en cuanto las tengamos.' },
+  { id: 'd2', threadId: 'th-412', from: 'luis@ejemplosur.example', subject: 'RE: Carga TR-0412 martes', date: '2026-11-25T17:30:00+01:00', body: 'Matrículas del camión: 1234 BCD. Remolque: R-5678-BBC.', attachments: ['matriculas_TR-0412.xlsx'] },
+  { id: 'd3', threadId: 'th-412', from: own, subject: 'DUA presentado TR-0412', date: '2026-11-25T12:00:00+01:00', body: 'DUA presentado a aduana: 26ES0000123456.', attachments: ['DUA_presentado.pdf'] },
+  { id: 'd4', threadId: 'th-412', from: 'luis@ejemplosur.example', subject: 'RE: Carga TR-0412 martes', date: '2026-11-26T08:05:00+01:00', body: 'CORRECCIÓN: el camión cambia. Nueva matrícula del camión: 4321 KLM. El remolque sigue igual.' },
+  { id: 'd5', threadId: 'th-415', from: 'ana@clientenorte.example', subject: 'TR-0415 salida jueves', date: '2026-11-25T10:00:00+01:00', body: 'Necesitamos las matrículas antes del jueves a mediodía.' },
+  { id: 'd6', threadId: 'th-398', from: 'luis@ejemplosur.example', subject: 'Matrículas contenedor TR-0398', date: '2026-11-19T14:15:00+01:00', body: 'Adjunto escaneo con matrículas y albarán.', attachments: ['escaneo_001.pdf'] },
+  { id: 'd7', threadId: 'th-398', from: 'pedro@modelo.example', subject: 'RE: Matrículas contenedor TR-0398', date: '2026-11-21T12:00:00+01:00', body: 'Entregado en destino, gracias.' },
+  { id: 'd8', threadId: 'th-421', from: own, subject: 'Documentación TR-0421', date: '2026-11-26T10:30:00+01:00', body: 'Enviada la documentación del envío TR-0421 a aduana.', attachments: ['documentacion_TR-0421.pdf'] }
+];
+// Correos que "llegan" durante la demostración (ficticios).
+const DEMO_INBOX = [
+  { id: 'n1', threadId: 'th-415', from: 'marta@fletesdemo.example', subject: 'TR-0415 matrículas', date: '2026-11-26T17:02:00+01:00', body: 'Camión asignado: 9876 PQR. Remolque: R-1122-CDD.' },
+  { id: 'n2', threadId: 'th-x1', from: 'ana@clientenorte.example', subject: 'Papeles de la carga del jueves', date: '2026-11-26T17:10:00+01:00', body: '¿Tenéis ya los papeles de la carga del jueves?' },
+  { id: 'n3', threadId: 'th-x2', from: 'aduana@aviso.example', subject: 'Rechazo de declaración', date: '2026-11-26T17:20:00+01:00', body: 'Rechazada la declaración 26ES0000123456: error en el código de la partida. 18 bultos, 9.450 kg.' },
+  { id: 'n4', threadId: 'th-x3', from: 'aduana@aviso.example', subject: 'Rechazo de declaración', date: '2026-11-26T17:25:00+01:00', body: 'Rechazada una declaración por falta de documento de acompañamiento. 12 bultos, 7.800 kg.' },
+  { id: 'n5', threadId: 'th-x2', from: own, subject: 'RE: Rechazo de declaración 26ES0000123456', date: '2026-11-26T17:40:00+01:00', body: 'Subsanación: corregido el código de partida y reenviamos la declaración 26ES0000123456.' },
+  { id: 'n6', threadId: 'th-x4', from: 'curso@formacion.example', subject: 'Curso de verano', date: '2026-11-26T17:15:00+01:00', body: 'Descubre nuestros cursos.' }
+];
+
+return {ensure,blankShipments,demoState,DEMO_INBOX,ingestMail,confirmPending,addShipment,summarize,search,stats,fmt};})();
+
+// Pantalla «Envíos»: ficha viva por envío, pendientes de relacionar, búsqueda y alta manual.
+function shipmentsUI({ host, getState, save, esc, msg, demo }) {
+  const st = () => getState();
+  let sub = 'list', sel = '', q = '';
+  const tag = (t, c = '') => `<span class="tag ${c}">${esc(t)}</span>`;
+  const sh = id => S.ensure(st()).items.find(s => s.id === id);
+  const mailById = id => S.ensure(st()).mails.find(m => m.id === id);
+  const num = n => (n == null ? '–' : String(Number(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.'));
+  const demoLeft = () => { const x = S.ensure(st()); return x.demo ? S.DEMO_INBOX.length - (x.demoCursor || 0) : 0; };
+
+  function head() {
+    const x = S.ensure(st()), k = S.stats(st());
+    const btn = (v, label) => `<button class="${sub === v ? 'on' : ''}" data-sh="sub" data-v="${v}">${label}</button>`;
+    return `<h2>Envíos</h2><div class="notice">Cada correo nuevo se suma a la ficha de su envío y actualiza el resumen. Si no se puede relacionar con seguridad, queda en Pendientes para que lo decidas.${x.demo ? ' <strong>Datos ficticios.</strong>' : ''}</div>
+<div class="line">${btn('list', `Envíos (${k.shipments})`)}${btn('pending', `Pendientes (${k.pending})`)}${btn('search', 'Buscar')}${btn('new', 'Nuevo envío')}</div>`;
+  }
+
+  function summary(s) {
+    const m = S.summarize(s);
+    const line = (label, e) => `<p><strong>${label}:</strong> ${e ? `${esc(S.fmt(e.date))} · ${esc(e.text)}<br><small>Fuente: ${esc(e.source)}</small>` : 'ninguna registrada'}</p>`;
+    return `<section class="line" id="summary"><h3>Resumen del envío</h3><p><small>Expediente ${esc(s.exp || '–')} · DUA ${esc(s.dua || '–')} · ${num(s.bultos)} bultos · ${num(s.kg)} kg</small></p>
+${line('Última gestión hecha', m.lastGestion)}${line('Última información recibida', m.lastInfo)}
+${m.rejectionOpen ? tag('Rechazo recibido y sin gestión posterior registrada', 'warn') + '<p><small>Dice «sin gestión registrada», no que nadie lo haya gestionado: solo conoce los correos que han llegado a la app.</small></p>' : ''}</section>`;
+  }
+
+  function card(s) {
+    const m = S.summarize(s);
+    return `<section class="line click" data-sh="open" data-id="${esc(s.id)}"><h3>${esc(s.id)} · ${esc(s.route || '')}</h3>
+<small>${esc(s.client)} · ${esc(s.provider)} · Exp. ${esc(s.exp || '–')} · DUA ${esc(s.dua || '–')} · ${num(s.bultos)} bultos · ${num(s.kg)} kg</small><br>
+${tag(s.status)}${m.rejectionOpen ? tag('Rechazo sin gestión posterior', 'warn') : ''}${m.plateNow.map(p => tag(p.role + ' ' + p.value)).join('')}
+<p><small>Última información: ${m.lastInfo ? esc(S.fmt(m.lastInfo.date) + ' · ' + m.lastInfo.text) : 'ninguna'}${m.lastGestion ? '<br>Última gestión: ' + esc(S.fmt(m.lastGestion.date) + ' · ' + m.lastGestion.text) : ''}</small></p></section>`;
+  }
+
+  function list() {
+    const items = S.ensure(st()).items.slice().sort((a, b) => (S.summarize(b).rejectionOpen - S.summarize(a).rejectionOpen) || a.id.localeCompare(b.id));
+    const sim = S.ensure(st()).demo ? `<button data-sh="simulate" ${demoLeft() ? '' : 'disabled'}>Simular llegada del siguiente correo (${demoLeft()} por llegar)</button>` : '';
+    if (!items.length) return `<p>Aún no hay envíos. Crea uno en «Nuevo envío»${demo ? ' o carga el ejemplo ficticio' : ''}. Los correos que lleguen se relacionarán con ellos.</p>${demo ? '<button data-sh="demo">Cargar ejemplo ficticio</button>' : ''}`;
+    return sim + items.map(card).join('');
+  }
+
+  function mailBlock(m, mark) {
+    const ev = (S.ensure(st()).items.find(s => s.id === m.shipmentId)?.events || []).find(e => e.mailId === m.id);
+    return `<div class="line ${mark ? 'hit' : ''}"><small>${esc(S.fmt(m.date))} · ${esc(m.from)} · ${m.direction === 'out' ? 'enviado por nosotros' : 'recibido'}</small><br><strong>${esc(m.subject)}</strong><p>${esc(m.body)}</p>${(m.attachments || []).map(a => tag('Adjunto: ' + a)).join('')}${ev?.corrects ? tag('Corrige un dato anterior (' + ev.corrects + ')', 'warn') : ''}${m.how ? `<p><small>${esc(m.how)}</small></p>` : ''}</div>`;
+  }
+
+  function detail(id, hits = []) {
+    const s = sh(id); if (!s) return '<p>Envío no encontrado.</p>';
+    const m = S.summarize(s);
+    const plates = (s.plates || []).slice().sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+    return `<button data-sh="back">← Volver</button><section class="line"><h3>${esc(s.id)} · ${esc(s.route || '')}</h3><small>${esc(s.cargo || '')}</small><br>${tag('Cliente: ' + s.client)}${tag('Proveedor: ' + s.provider)}${tag(s.status)}</section>
+${summary(s)}
+<h3>Matrículas</h3>${plates.length ? `<section class="line">${m.plateNow.map(p => `<p><strong>${esc(p.role)} ${esc(p.value)}</strong> <small>desde ${esc(S.fmt(p.date))}${p.replaces ? ', sustituye a ' + esc(p.replaces) : ''}</small></p>`).join('')}${plates.some(p => p.replaces) ? '<p><small>Hay una corrección: el historial conserva los valores anteriores.</small></p>' : ''}</section>` : '<div class="notice">Ningún correo de este envío trae matrículas todavía.</div>'}
+${(s.conflicts || []).length ? `<h3>Datos que no coinciden con la ficha</h3>${s.conflicts.map(c => `<div class="notice">${esc(S.fmt(c.date))} · ${esc(c.text)}. No se ha cambiado la ficha: revisa cuál vale.</div>`).join('')}` : ''}
+<h3>Historial (${s.events.length})</h3>${s.events.slice().reverse().map(e => `<p><strong>${esc(S.fmt(e.date))}</strong> · ${e.side === 'gestion' ? tag('Gestión nuestra') : tag('Información')}${e.rejection ? tag('Rechazo', 'warn') : ''} ${esc(e.text)}<br><small>${esc(e.source)}</small></p>`).join('') || '<p>Sin historial.</p>'}
+<h3>Correos del envío (${s.mailIds.length})</h3>${s.mailIds.map(mailById).filter(Boolean).sort((a, b) => Date.parse(b.date) - Date.parse(a.date)).map(mm => mailBlock(mm, hits.includes(mm.id))).join('')}`;
+  }
+
+  function pending() {
+    const P = S.ensure(st()).pending;
+    if (!P.length) return '<p>No hay correos pendientes de relacionar.</p>';
+    return P.map(p => { const m = mailById(p.mailId); return `<section class="line">${mailBlock(m)}${m.facts?.kind === 'rechazo' ? tag('Rechazo sin relacionar con seguridad', 'warn') : ''}<p><small>${esc(p.why)}</small></p>
+${p.candidates.map(c => `<button data-sh="confirm" data-mail="${esc(p.mailId)}" data-id="${esc(c)}">Es de ${esc(c)}</button>`).join('')}<button data-sh="discard" data-mail="${esc(p.mailId)}">Descartar</button></section>`; }).join('');
+  }
+
+  function results() {
+    const r = S.search(st(), q);
+    if (r === null) return '<div class="notice">Escribe un DUA, expediente, matrícula o palabras del correo. Prueba con un número de DUA o «matrícula camión».</div>';
+    if (!r.length) return '<div class="notice"><strong>No he encontrado nada.</strong> Eso no significa que no haya llegado: puede estar en otro buzón, ser aún un correo pendiente, venir en un adjunto escaneado (la app no lee su texto) o usar otras palabras. La búsqueda es literal, no por significado.</div>';
+    return `<div class="notice">${r.length} envío(s).</div>` + r.map(x => `<div>${x.exact.length ? tag('Coincide por ' + x.exact.join(', '), 'ok') : ''}${card(sh(x.shipmentId))}</div>`).join('');
+  }
+
+  function form() {
+    const f = (id, label, ph = '') => `<label>${label}<input id="ns-${id}" placeholder="${esc(ph)}"></label>`;
+    return `<section class="line"><h3>Nuevo envío</h3>${f('id', 'Referencia del envío', 'TR-0500')}${f('route', 'Ruta')}${f('client', 'Cliente')}${f('clientDomain', 'Dominio de correo del cliente', 'cliente.example')}${f('provider', 'Proveedor de transporte')}${f('providerDomain', 'Dominio de correo del proveedor')}${f('exp', 'Expediente', 'EXP-2611-12')}${f('dua', 'Número de DUA')}${f('bultos', 'Bultos')}${f('kg', 'Kilos')}<button data-sh="create">Crear envío</button><p><small>Los dominios solo sirven para proponer, nunca para asignar solos.</small></p></section>`;
+  }
+
+  function paint() {
+    const body = sub === 'detail' ? detail(sel, hitsSel) : sub === 'pending' ? pending() : sub === 'search' ? `<label>Buscar<input id="sh-q" value="${esc(q)}" placeholder="DUA, expediente, matrícula o palabras"></label><div id="sh-results">${results()}</div>` : sub === 'new' ? form() : list();
+    host.innerHTML = (sub === 'detail' ? '' : head()) + `<div id="sh-body">${body}</div>`;
+  }
+  let hitsSel = [];
+
+  async function click(e) {
+    const b = e.target.closest('[data-sh]'); if (!b || b.disabled) return;
+    const a = b.dataset.sh, d = b.dataset;
+    try {
+      if (a === 'sub') { sub = d.v; sel = ''; }
+      else if (a === 'open') { sub = 'detail'; sel = d.id; hitsSel = []; }
+      else if (a === 'back') { sub = q && S.search(st(), q)?.length ? 'search' : 'list'; sel = ''; }
+      else if (a === 'demo') { const x = S.demoState().shipments; x.demo = true; x.demoCursor = 0; st().shipments = x; save(); msg('Ejemplo ficticio cargado.'); }
+      else if (a === 'simulate') { const x = S.ensure(st()); const m = S.DEMO_INBOX[x.demoCursor || 0]; if (!m) return; x.demoCursor = (x.demoCursor || 0) + 1; const r = S.ingestMail(st(), m); save(); msg(r.status === 'linked' ? `Correo añadido a ${r.shipmentId}. ${r.why}` : r.status === 'pending' ? 'Correo pendiente: ' + r.why : r.status === 'ignored' ? 'Correo sin relación con ningún envío.' : r.why); }
+      else if (a === 'confirm') { S.confirmPending(st(), d.mail, d.id); save(); msg(`Correo añadido a ${d.id} con su fuente.`); }
+      else if (a === 'discard') { S.confirmPending(st(), d.mail, null); save(); msg('Correo descartado.'); }
+      else if (a === 'create') { const v = k => host.querySelector('#ns-' + k)?.value.trim() || ''; S.addShipment(st(), { id: v('id'), route: v('route'), client: v('client'), clientDomain: v('clientDomain'), provider: v('provider'), providerDomain: v('providerDomain'), exp: v('exp'), dua: v('dua'), bultos: v('bultos'), kg: v('kg') }); save(); sub = 'list'; msg('Envío creado.'); }
+      paint();
+    } catch (err) { msg({ SHIPMENT_ID_REQUIRED: 'Falta la referencia del envío.', SHIPMENT_EXISTS: 'Ya existe un envío con esa referencia.', NOT_PENDING: 'Ese correo ya se había resuelto.' }[err.message] || err.message); paint(); }
+  }
+  function input(e) {
+    if (e.target.id !== 'sh-q') return;
+    q = e.target.value; host.querySelector('#sh-results').innerHTML = results();
+  }
+  host.addEventListener('click', click); host.addEventListener('input', input);
+  paint();
+  return () => { host.removeEventListener('click', click); host.removeEventListener('input', input); };
+}
+
+
 
 
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -44,8 +429,8 @@ function get(){return state.cases.find(c=>c.id===selected);}
 function msg(t){$('#message').textContent=t;$('#message').hidden=false;}
 function download(name,text,type='application/json'){const u=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),2000);}
 function status(c){return {draft:'En preparación',reviewed:'Revisado · demo',assigned:'Asignado · aviso local'}[c.status];}
-function render(){disposeIntegration?.();disposeIntegration=null;save();$('#nav').innerHTML=['cases','inbox','knowledge','connections','automation'].map((v,i)=>`<button class="${view===v?'on':''}" data-view="${v}">${['Expedientes','Avisos y borradores','Conocimiento','Conexiones','Automatización'][i]}</button>`).join('');
- if(view==='automation')renderAutomation();if(view==='cases')renderCases();if(view==='inbox')renderInbox();if(view==='knowledge')renderKnowledge();if(view==='connections')renderConnections();}
+function render(){disposeIntegration?.();disposeIntegration=null;save();$('#nav').innerHTML=['cases','shipments','inbox','knowledge','connections','automation'].map((v,i)=>`<button class="${view===v?'on':''}" data-view="${v}">${['Expedientes','Envíos','Avisos y borradores','Conocimiento','Conexiones','Automatización'][i]}</button>`).join('');
+ if(view==='shipments')disposeIntegration=shipmentsUI({host:$('#content'),getState:()=>state,save,esc,msg,demo:!liveMode});if(view==='automation')renderAutomation();if(view==='cases')renderCases();if(view==='inbox')renderInbox();if(view==='knowledge')renderKnowledge();if(view==='connections')renderConnections();}
 function renderCases(){const c=get();$('#content').innerHTML=`<section class="toolbar"><button class="primary" data-action="new">Crear expediente</button>${liveMode?'':'<button data-action="sample">Cargar ejemplo ficticio</button>'}<button data-action="backup">Exportar datos locales</button></section><div class="layout"><aside><h2>Tu bandeja</h2>${state.cases.filter(x=>actor==='Coordinador'||x.agent===actor||x.routing?.agent===actor).map(x=>`<button class="case ${selected===x.id?'selected':''}" data-case="${x.id}"><strong>${esc(x.title)}</strong><span>${esc(status(x))}</span><small>${x.lines.length} líneas · ${esc(x.agent||x.routing?.agent||'Sin responsable')}</small></button>`).join('')||'<p>No hay expedientes. Crea uno o carga el ejemplo.</p>'}</aside><article>${c?detail(c):'<h2>Del documento a la revisión</h2><p>Crea un expediente, importa líneas CSV o añádelas a mano, propone códigos desde referencias y revisa antes de asignar.</p><div class="notice">Solo datos ficticios. No conecta cuentas ni presenta o envía documentos. Los motores de proveedor no están integrados.</div>'}</article></div>`;}
 function detail(c){const t=C.totals(c),i=C.issues(c);return `<div class="heading"><div><span class="badge">${esc(status(c))}</span><h2>${esc(c.title)}</h2><p>${esc(c.provider)} · ${esc(c.agent||'Sin asignar')}</p></div><button data-action="dossier">Descargar expediente JSON</button></div><div class="notice">DEMO NO DECLARABLE. Un formato HS correcto no prueba que exista o sea aplicable. Los documentos son ficticios. Los candidatos oficiales acotados no equivalen a clasificación legal ni TARIC10.</div><div class="fields"><label>Nombre<input data-field="title" value="${esc(c.title)}"></label><label>Perfil<select data-field="provider">${[...new Set([c.provider,'Formato genérico','Motor proveedor A pendiente','Motor proveedor B pendiente'])].map(x=>`<option ${x===c.provider?'selected':''}>${x}</option>`).join('')}</select></label><label>Valor esperado (EUR)<input type="number" min="0" step="0.01" data-field="expectedValue" value="${esc(c.expectedValue)}"></label><label>Peso neto esperado (kg)<input type="number" min="0" step="0.01" data-field="expectedNet" value="${esc(c.expectedNet)}"></label></div>${c.preparation?preparationView(c):''}<h3>Líneas del expediente</h3><div class="actions"><button data-action="add-line">Añadir línea</button><button data-action="csv-in">Importar CSV</button><button data-action="csv-template">Plantilla ficticia CSV</button>${!c.automation?'<button data-action="propose">Proponer HS desde referencias locales</button>':''}</div><p class="muted">Coincidencia exacta de descripción + material. Sin coincidencia o con contradicción: queda pendiente. Nunca asigna un código por intuición.</p>${c.lines.map((l,n)=>`<section class="line"><h4>Línea ${n+1} · ${esc(l.ref||'Sin referencia')}</h4>${l.decision?decisionView(l):''}<div class="fields">${[['ref','Referencia'],['description','Descripción'],['material','Material'],['hs','HS propuesto / revisado'],['value','Valor EUR'],['net','Neto kg'],['source','Fuente / fila']].map(([k,label])=>`<label>${label}<input data-line="${l.id}" data-key="${k}" value="${esc(l[k])}" ${['value','net'].includes(k)?'type="number" min="0" step="0.01"':''}></label>`).join('')}</div>${l.proposal?`<p class="notice">${esc(l.proposal)}</p>`:''}<label class="check"><input type="checkbox" data-confirm="${l.id}" ${l.confirmed?'checked':''}>He revisado esta línea (demostración)</label><button data-remove="${l.id}">Quitar línea</button></section>`).join('')||'<p>Sin líneas.</p>'}<h3>Documentos y observaciones</h3><label>Añadir documento de texto ficticio (.txt)<input type="file" id="docfile" accept=".txt"></label><p class="muted">Se guarda su contenido en este navegador y en las exportaciones. No añadas documentos reales a esta demo.</p>${c.documents.map(d=>`<p>${esc(d.name)} · ${d.text.length} caracteres</p>`).join('')}<label>Notas<textarea data-field="notes">${esc(c.notes)}</textarea></label><div class="totals"><span>Valor calculado <strong>${t.value.toFixed(2)} EUR</strong></span><span>Neto calculado <strong>${t.net.toFixed(2)} kg</strong></span></div><h3>Revisión</h3>${i.length?`<ul class="warnings">${i.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:'<p class="ok">'+(c.reviewedAt?'Revisión de demostración registrada.':'Comprobaciones locales superadas. Falta confirmar la revisión humana.')+'</p>'}<div class="actions"><button class="primary" data-action="review">Confirmar revisión del expediente</button><select id="agent"><option value="">Elegir responsable ficticio</option><option>Operador A</option><option>Operador B</option></select><button data-action="assign">Asignar y crear aviso local</button><button data-action="draft">Preparar borrador</button><button data-action="csv-out">Exportar líneas CSV</button></div><h3>Trazabilidad</h3><ul>${c.audit.map(a=>`<li>${esc(new Date(a.at).toLocaleString('es-ES'))} · ${esc(a.action)}</li>`).join('')}</ul>`;}
 function renderInbox(){$('#content').innerHTML=`<h2>Avisos y borradores</h2><div class="notice">Avisos dentro de la app. En modo servidor se comparten al guardar y recargar el espacio. No se envían correos ni notificaciones externas.</div><h3>Avisos de asignación</h3>${state.notices.filter(n=>actor==='Coordinador'||n.to===actor).map(n=>`<section class="line"><strong>${esc(n.to)}</strong><p>${esc(n.text)}</p>${!state.cases.find(c=>c.id===n.caseId)?.reviewedAt?'<p class="notice">Aviso desactualizado: expediente modificado, pendiente de nueva revisión.</p>':''}<span class="badge">${n.read?'Leído localmente':'Sin leer localmente'}</span><button data-read="${n.id}">Marcar leído</button></section>`).join('')||'<p>No hay avisos.</p>'}<h3>Borradores para revisión</h3>${state.drafts.map(d=>`<section class="line"><label>Destinatario ficticio<input data-draft="${d.id}" data-dkey="to" value="${esc(d.to)}"></label><label>Asunto<input data-draft="${d.id}" data-dkey="subject" value="${esc(d.subject)}"></label><label>Cuerpo<textarea data-draft="${d.id}" data-dkey="body">${esc(d.body)}</textarea></label><p>Estado: ${state.cases.find(c=>c.id===d.caseId)?.reviewedAt?'borrador local, no enviado':'desactualizado: expediente modificado, volver a revisar'}.</p><button data-download-draft="${d.id}">Descargar borrador TXT</button></section>`).join('')||'<p>No hay borradores.</p>'}`;}
