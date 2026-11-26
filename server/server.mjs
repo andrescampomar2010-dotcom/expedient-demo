@@ -55,6 +55,7 @@ let shipDb=null;
 if(String(dataPath).endsWith('.db')&&process.env.APP_SHIPMENTS_STORE!=='document'){
  shipDb=openShipmentsDb(dataPath,{ownDomains});
  const cur=store.read(),legacy=cur.state.shipments;
+ {const c2=store.read();let ch=false;for(const k of ['receiver','receiverSent']){const r0=c2.state[k];if(r0&&typeof r0==='object'&&!shipDb.getRec(k)){shipDb.putRec(k,r0,r0.seen||{});console.log('Estado del receptor',k,'migrado:',Object.keys(r0.seen||{}).length,'correos vistos');}if(r0&&shipDb.getRec(k)){const bk=dataPath+'.receptor-'+k+'-anterior.json';if(!existsSync(bk))writeFileSync(bk,JSON.stringify(r0),{mode:0o600});delete c2.state[k];ch=true}}if(ch)await store.write(c2.revision,c2.state);}
  if(legacy?.items?.length||legacy?.mails?.length){const r=shipDb.importLegacy(legacy);
   if(r.imported||r.reason==='ya migrado'){const bk=dataPath+'.envios-anterior.json';if(!existsSync(bk))writeFileSync(bk,JSON.stringify(legacy),{mode:0o600});delete cur.state.shipments;await store.write(cur.revision,cur.state);console.log('Envíos migrados al almacén por registro:',JSON.stringify(r),'copia anterior en',bk);}}
 }
@@ -170,7 +171,7 @@ const server=http.createServer(async(req,res)=>{
   if(req.method==='GET'){const raw=store.readJson?.();if(raw){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});return res.end(raw);}return json(res,200,store.read());}
   if(req.headers.origin!==origin||!same(s.csrf,req.headers['x-csrf-token']))return json(res,403,{error:'LOCAL_CONFIRMATION_REQUIRED'});
   let body='';for await(const chunk of req){body+=chunk;if(body.length>maxBodyBytes)return json(res,413,{error:'WORKSPACE_TOO_LARGE'});}
-  try{const input=JSON.parse(body);const authoritative=store.read().state;if(authoritative.receiver)input.state.receiver=authoritative.receiver;if(authoritative.receiverSent)input.state.receiverSent=authoritative.receiverSent;return json(res,200,await store.write(input.revision,input.state));}catch(err){return json(res,err.message==='REVISION_CONFLICT'?409:400,{error:err.message==='REVISION_CONFLICT'?'REVISION_CONFLICT_RELOAD_BEFORE_EDITING':'INVALID_WORKSPACE'});}
+  try{const input=JSON.parse(body);if(shipDb){delete input.state.receiver;delete input.state.receiverSent;}else{const authoritative=store.read().state;if(authoritative.receiver)input.state.receiver=authoritative.receiver;if(authoritative.receiverSent)input.state.receiverSent=authoritative.receiverSent;}return json(res,200,await store.write(input.revision,input.state,input.docH));}catch(err){const conflict=err.message==='REVISION_CONFLICT'||err.message==='CASE_CONFLICT';return json(res,conflict?409:400,{error:err.message==='REVISION_CONFLICT'?'REVISION_CONFLICT_RELOAD_BEFORE_EDITING':err.message==='CASE_CONFLICT'?'CASE_CONFLICT_RELOAD_BEFORE_EDITING':'INVALID_WORKSPACE',...(err.caseId?{caseId:err.caseId}:{})});}
  }
  if(u.pathname==='/api/claude/analyze'){
   if(req.headers.origin!==origin||!s||!same(s.csrf,req.headers['x-csrf-token']))return json(res,403,{error:'LOCAL_CONFIRMATION_REQUIRED'});
