@@ -1,8 +1,10 @@
 import {createHash} from 'node:crypto';
 import {processMail} from './automation.mjs';
 import {invalidate,audit} from '../web/core.mjs';
+import {ingestMail,ensure as ensureShipments} from '../web/shipments.mjs';
+const plainText=b=>String(b?.content||'').replace(/<(style|script)[\s\S]*?<\/\1>/gi,' ').replace(/<br\s*\/?>|<\/p>/gi,'\n').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/[ \t]+/g,' ').trim();
 export function safeGraphPath(url){const u=new URL(url,'https://graph.microsoft.com/v1.0/');if(u.origin!=='https://graph.microsoft.com'||!u.pathname.startsWith('/v1.0/me/')||u.username||u.password)throw Error('UNSAFE_GRAPH_CURSOR');return u.pathname.slice('/v1.0'.length)+u.search;}
-export function createReceiver({store,get,folder,scopeKey,since,transform=graphEvent}){
+export function createReceiver({store,get,folder,scopeKey,since,transform=graphEvent,ownDomains=[]}){
  let busy=false;
  return {async tick(){if(busy)return {busy:true};busy=true;try{
   const initial=store.read();const previous=initial.state.receiver;const key=scopeKey+'|'+folder+'|'+since;
@@ -19,6 +21,7 @@ export function createReceiver({store,get,folder,scopeKey,since,transform=graphE
     const attachments=message.hasAttachments?await get('/me/messages/'+encodeURIComponent(m.id)+'/attachments?$select=id,name,size,contentType,isInline&$top=10'): {value:[]};
     for(let ai=0;ai<(attachments.value||[]).length;ai++){const a=attachments.value[ai];if(a['@odata.type']==='#microsoft.graph.fileAttachment'&&a.name?.toLowerCase().endsWith('.xlsx')&&!a.isInline&&a.size<=1000000)attachments.value[ai]=await get('/me/messages/'+encodeURIComponent(m.id)+'/attachments/'+encodeURIComponent(a.id));}
 
+    try{ensureShipments(working.state).ownDomains=ownDomains;ingestMail(working.state,{id:message.id,threadId:message.conversationId||message.id,from:message.from?.emailAddress?.address||'unverified',subject:message.subject||'Sin asunto',date:message.receivedDateTime,body:message.body?.contentType==='html'?plainText(message.body):String(message.body?.content||''),attachments:(attachments.value||[]).map(a=>a.name).filter(Boolean)});}catch(e){/* envíos: un fallo aquí no debe bloquear la preparación de expedientes */}
     const event=await transform(message,thread,attachments);const existing=working.state.cases.find(c=>c.mail?.threadId===event.threadId);const result=await processMail(working.state,event);const fresh=working.state.cases.find(c=>c.id===result.caseId);
     if(fresh&&!result.duplicate){fresh.mail.messageIds=[...new Set([...(existing?.mail?.messageIds||[]),message.id])];fresh.mail.threadTruncated=!!thread['@odata.nextLink'];fresh.mail.attachmentsTruncated=!!attachments['@odata.nextLink'];if(existing){const freshId=fresh.id;fresh.id=existing.id;fresh.previousVersions=[...(existing.previousVersions||[]),{...existing,previousVersions:undefined}].slice(-10);fresh.audit=[...existing.audit,...fresh.audit];audit(fresh,'Hilo actualizado: nueva preparación invalida revisión anterior');working.state.cases=working.state.cases.filter(c=>c!==existing);for(const p of working.state.automation.processed)if(p.caseId===freshId)p.caseId=fresh.id;for(const p of working.state.automation.events)if(p.caseId===freshId)p.caseId=fresh.id;for(const n of working.state.notices)if(n.caseId===freshId)n.caseId=fresh.id;}events++;}
     current.seen[m.id]=version;
