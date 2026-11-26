@@ -1,7 +1,9 @@
 import * as S from './shipments.mjs';
 // Pantalla «Envíos»: ficha viva por envío, pendientes de relacionar, búsqueda y alta manual.
-export function shipmentsUI({ host, getState, save, esc, msg, demo, ai }) {
-  const st = () => getState();
+export function shipmentsUI({ host, getState, save, esc, msg, demo, ai, remote }) {
+  const cache = remote ? S.blankShipments() : null;
+  const st = () => (remote ? { shipments: cache } : getState());
+  let tok = 0, moreList = false;
   let sub = 'list', sel = '', q = '';
   const tag = (t, c = '') => `<span class="tag ${c}">${esc(t)}</span>`;
   const sh = id => S.ensure(st()).items.find(s => s.id === id);
@@ -10,7 +12,7 @@ export function shipmentsUI({ host, getState, save, esc, msg, demo, ai }) {
   const demoLeft = () => { const x = S.ensure(st()); return x.demo ? S.DEMO_INBOX.length - (x.demoCursor || 0) : 0; };
 
   function head() {
-    const x = S.ensure(st()), k = S.stats(st());
+    const x = S.ensure(st()), k = remote ? remote.stats : S.stats(st());
     const btn = (v, label) => `<button class="${sub === v ? 'on' : ''}" data-sh="sub" data-v="${v}">${label}</button>`;
     return `<h2>Envíos</h2><div class="notice">Cada correo nuevo se suma a la ficha de su envío y actualiza el resumen. Si no se puede relacionar con seguridad, queda en Pendientes para que lo decidas.${x.demo ? ' <strong>Datos ficticios.</strong>' : ''}</div>
 <div class="line">${btn('list', `Envíos (${k.shipments})`)}${btn('pending', `Pendientes (${k.pending})`)}${btn('search', 'Buscar')}${btn('new', 'Nuevo envío')}</div>`;
@@ -25,7 +27,7 @@ ${m.rejectionOpen ? tag('Rechazo recibido y sin gestión posterior registrada', 
   }
 
   function card(s) {
-    const m = S.summarize(s);
+    const m = s.summary || S.summarize(s);
     return `<section class="line click" data-sh="open" data-id="${esc(s.id)}"><h3>${esc(s.id)} · ${esc(s.route || '')}</h3>
 <small>${esc(s.client)} · ${esc(s.provider)} · Exp. ${esc(s.exp || '–')} · DUA ${esc(s.dua || '–')} · ${num(s.bultos)} bultos · ${num(s.kg)} kg</small><br>
 ${tag(s.status)}${m.rejectionOpen ? tag('Rechazo sin gestión posterior', 'warn') : ''}${m.plateNow.map(p => tag(p.role + ' ' + p.value)).join('')}
@@ -33,10 +35,10 @@ ${tag(s.status)}${m.rejectionOpen ? tag('Rechazo sin gestión posterior', 'warn'
   }
 
   function list() {
-    const items = S.ensure(st()).items.slice().sort((a, b) => (S.summarize(b).rejectionOpen - S.summarize(a).rejectionOpen) || a.id.localeCompare(b.id));
+    const items = S.ensure(st()).items.slice().sort((a, b) => ((b.summary || S.summarize(b)).rejectionOpen - (a.summary || S.summarize(a)).rejectionOpen) || a.id.localeCompare(b.id));
     const sim = S.ensure(st()).demo ? `<button data-sh="simulate" ${demoLeft() ? '' : 'disabled'}>Simular llegada del siguiente correo (${demoLeft()} por llegar)</button>` : '';
     if (!items.length) return `<p>Aún no hay envíos. Crea uno en «Nuevo envío»${demo ? ' o carga el ejemplo ficticio' : ''}. Los correos que lleguen se relacionarán con ellos.</p>${demo ? '<button data-sh="demo">Cargar ejemplo ficticio</button>' : ''}`;
-    return sim + items.map(card).join('');
+    return sim + items.map(card).join('') + (remote && remote.next ? '<button data-sh="more">Cargar más envíos</button>' : '') + (remote ? `<p><small>Mostrando ${items.length} de ${remote.stats.shipments}.</small></p>` : '');
   }
 
   function mailBlock(m, mark) {
@@ -66,10 +68,10 @@ ${a?.shipmentId ? `<button class="primary" data-sh="confirm" data-via="ai" data-
   }
 
   function results() {
-    const r = S.search(st(), q);
+    const r = remote ? remote.results : S.search(st(), q);
     if (r === null) return '<div class="notice">Escribe un DUA, expediente, matrícula o palabras del correo. Prueba con un número de DUA o «matrícula camión».</div>';
     if (!r.length) return '<div class="notice"><strong>No he encontrado nada.</strong> Eso no significa que no haya llegado: puede estar en otro buzón, ser aún un correo pendiente, venir en un adjunto escaneado (la app no lee su texto) o usar otras palabras. La búsqueda es literal, no por significado.</div>';
-    return `<div class="notice">${r.length} envío(s).</div>` + r.map(x => `<div>${x.exact.length ? tag('Coincide por ' + x.exact.join(', '), 'ok') : ''}${card(sh(x.shipmentId))}</div>`).join('');
+    return `<div class="notice">${r.length} envío(s).</div>` + r.map(x => `<div>${x.exact.length ? tag('Coincide por ' + x.exact.join(', '), 'ok') : ''}${sh(x.shipmentId) ? card(sh(x.shipmentId)) : ''}</div>`).join('');
   }
 
   function form() {
@@ -77,7 +79,11 @@ ${a?.shipmentId ? `<button class="primary" data-sh="confirm" data-via="ai" data-
     return `<section class="line"><h3>Nuevo envío</h3>${f('id', 'Referencia del envío', 'TR-0500')}${f('route', 'Ruta')}${f('client', 'Cliente')}${f('clientDomain', 'Dominio de correo del cliente', 'cliente.example')}${f('provider', 'Proveedor de transporte')}${f('providerDomain', 'Dominio de correo del proveedor')}${f('exp', 'Expediente', 'EXP-2611-12')}${f('dua', 'Número de DUA')}${f('bultos', 'Bultos')}${f('kg', 'Kilos')}<button data-sh="create">Crear envío</button><p><small>Los dominios solo sirven para proponer, nunca para asignar solos.</small></p></section>`;
   }
 
-  function paint() {
+  async function paint(more = false) {
+    if (remote) { const t = ++tok; try { await remote.load({ sub, sel, q, more }, cache); } catch (err) { msg('No se pudo cargar: ' + err.message); } if (t !== tok) return; }
+    paintNow();
+  }
+  function paintNow() {
     const body = sub === 'detail' ? detail(sel, hitsSel) : sub === 'pending' ? pending() : sub === 'search' ? `<label>Buscar<input id="sh-q" value="${esc(q)}" placeholder="DUA, expediente, matrícula o palabras"></label><div id="sh-results">${results()}</div>` : sub === 'new' ? form() : list();
     host.innerHTML = (sub === 'detail' ? '' : head()) + `<div id="sh-body">${body}</div>`;
   }
@@ -89,19 +95,21 @@ ${a?.shipmentId ? `<button class="primary" data-sh="confirm" data-via="ai" data-
     try {
       if (a === 'sub') { sub = d.v; sel = ''; }
       else if (a === 'open') { sub = 'detail'; sel = d.id; hitsSel = []; }
-      else if (a === 'back') { sub = q && S.search(st(), q)?.length ? 'search' : 'list'; sel = ''; }
+      else if (a === 'back') { sub = q && (remote ? remote.results?.length : S.search(st(), q)?.length) ? 'search' : 'list'; sel = ''; }
+      else if (a === 'more') { await paint(true); return; }
       else if (a === 'demo') { const x = S.demoState().shipments; x.demo = true; x.demoCursor = 0; st().shipments = x; save(); msg('Ejemplo ficticio cargado.'); }
       else if (a === 'simulate') { const x = S.ensure(st()); const m = S.DEMO_INBOX[x.demoCursor || 0]; if (!m) return; x.demoCursor = (x.demoCursor || 0) + 1; const r = S.ingestMail(st(), m); save(); msg(r.status === 'linked' ? `Correo añadido a ${r.shipmentId}. ${r.why}` : r.status === 'pending' ? 'Correo pendiente: ' + r.why : r.status === 'ignored' ? 'Correo sin relación con ningún envío.' : r.why); }
-      else if (a === 'ask') { const x = S.ensure(st()), m = mailById(d.mail); msg('Consultando a la IA…'); const r = await ai.ask({ subject: m.subject, body: m.body, from: m.from }, x.items.filter(i => i.status !== 'Entregado')); if (r.error) throw Error('IA: ' + r.error); S.attachProposal(st(), d.mail, r) ? msg('Sugerencia recibida. Es solo una propuesta: tú decides.') : msg('La IA devolvió un envío no válido; se ignora.'); save(); }
-      else if (a === 'confirm') { S.confirmPending(st(), d.mail, d.id, d.via); save(); msg(`Correo añadido a ${d.id} con su fuente.`); }
-      else if (a === 'discard') { S.confirmPending(st(), d.mail, null); save(); msg('Correo descartado.'); }
-      else if (a === 'create') { const v = k => host.querySelector('#ns-' + k)?.value.trim() || ''; S.addShipment(st(), { id: v('id'), route: v('route'), client: v('client'), clientDomain: v('clientDomain'), provider: v('provider'), providerDomain: v('providerDomain'), exp: v('exp'), dua: v('dua'), bultos: v('bultos'), kg: v('kg') }); save(); sub = 'list'; msg('Envío creado.'); }
-      paint();
-    } catch (err) { msg({ SHIPMENT_ID_REQUIRED: 'Falta la referencia del envío.', SHIPMENT_EXISTS: 'Ya existe un envío con esa referencia.', NOT_PENDING: 'Ese correo ya se había resuelto.' }[err.message] || err.message); paint(); }
+      else if (a === 'ask') { const x = S.ensure(st()), m = mailById(d.mail); msg('Consultando a la IA…'); const open = remote ? await remote.openHeads() : x.items.filter(i => i.status !== 'Entregado'); const r = await ai.ask({ subject: m.subject, body: m.body, from: m.from }, open); if (r.error) throw Error('IA: ' + r.error); const ok = remote ? (await remote.op({ op: 'proposal', mailId: d.mail, proposal: r })).attached : S.attachProposal(st(), d.mail, r); ok ? msg('Sugerencia recibida. Es solo una propuesta: tú decides.') : msg('La IA devolvió un envío no válido; se ignora.'); if (!remote) save(); }
+      else if (a === 'confirm') { if (remote) await remote.op({ op: 'confirm', mailId: d.mail, shipmentId: d.id, via: d.via }); else { S.confirmPending(st(), d.mail, d.id, d.via); save(); } msg(`Correo añadido a ${d.id} con su fuente.`); }
+      else if (a === 'discard') { if (remote) await remote.op({ op: 'discard', mailId: d.mail }); else { S.confirmPending(st(), d.mail, null); save(); } msg('Correo descartado.'); }
+      else if (a === 'create') { const v = k => host.querySelector('#ns-' + k)?.value.trim() || ''; const data = { id: v('id'), route: v('route'), client: v('client'), clientDomain: v('clientDomain'), provider: v('provider'), providerDomain: v('providerDomain'), exp: v('exp'), dua: v('dua'), bultos: v('bultos'), kg: v('kg') }; if (remote) await remote.op({ op: 'create', data }); else { S.addShipment(st(), data); save(); } sub = 'list'; msg('Envío creado.'); }
+      await paint();
+    } catch (err) { msg({ SHIPMENT_ID_REQUIRED: 'Falta la referencia del envío.', SHIPMENT_EXISTS: 'Ya existe un envío con esa referencia.', NOT_PENDING: 'Ese correo ya se había resuelto.' }[err.message] || err.message); await paint(); }
   }
   function input(e) {
     if (e.target.id !== 'sh-q') return;
-    q = e.target.value; host.querySelector('#sh-results').innerHTML = results();
+    q = e.target.value; if (!remote) { host.querySelector('#sh-results').innerHTML = results(); return; }
+    clearTimeout(input.t); input.t = setTimeout(async () => { try { await remote.load({ sub: 'search', q }, cache); } catch (err) { msg('No se pudo buscar: ' + err.message); return; } const el = host.querySelector('#sh-results'); if (el && q === e.target.value) el.innerHTML = results(); }, 250);
   }
   host.addEventListener('click', click); host.addEventListener('input', input);
   paint();
