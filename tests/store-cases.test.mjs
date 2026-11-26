@@ -49,3 +49,17 @@ test('avisos y borradores por registro: orden de inserción, conflicto solo en e
  const z=a.read();z.state.notices.push({id:'n9'});z.state.drafts.push({id:'d9'});await a.write(z.revision,z.state);a.close();b.close();
  const rs=run('restore',f,p);assert.equal(rs.status,0,rs.stderr);const c=await openStore(p);const st=c.read().state;assert.deepEqual(st.notices.map(n=>n.id),['n1','n2','n3']);assert.deepEqual(st.drafts.map(n=>n.id),['d1']);
 });
+test('historial automático: un guardado que no tocó la parte común no pierde lo que escribió el receptor entre lectura y guardado; el receptor con revisión vieja falla sin escribir',async()=>{
+ const p=mk();const user=await openStore(p),rcv=await openStore(p);let s=user.read();s.state.cases=[C('A')];await user.write(s.revision,s.state);
+ const u=user.read(),r1=rcv.read();                                    // la persona lee
+ r1.state.history.push({id:'h-auto',t:1});await rcv.write(r1.revision,r1.state);   // llega correo: el receptor escribe historial
+ u.state.cases[0].n=5;await user.write(u.revision,u.state,u.docH);     // la persona guarda un expediente sin tocar la parte común
+ const fin=user.read().state;assert.deepEqual(fin.history.map(h=>h.id),['h-auto'],'el historial automático se conserva');assert.equal(fin.cases[0].n,5);
+ // el receptor con una lectura vieja y la parte común cambiada por otro: se rechaza (no pisa) y el llamador reintenta
+ const old=rcv.read();const u2=user.read();u2.state.history.push({id:'h-user'});await user.write(u2.revision,u2.state,u2.docH);
+ old.state.history.push({id:'h-auto2'});await assert.rejects(()=>rcv.write(old.revision,old.state),/REVISION_CONFLICT/);
+ assert.deepEqual(user.read().state.history.map(h=>h.id),['h-auto','h-user']);
+ // la persona que SÍ modificó la parte común sobre base vieja recibe 409 y su texto queda en su memoria (no se escribe nada)
+ const mine=user.read();const other=rcv.read();other.state.history.push({id:'h-3'});await rcv.write(other.revision,other.state);
+ mine.state.history.push({id:'mio'});await assert.rejects(()=>user.write(mine.revision,mine.state,mine.docH),/REVISION_CONFLICT/);
+});
