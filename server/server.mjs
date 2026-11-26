@@ -7,6 +7,7 @@ import {readDriveText} from './drive-text.mjs';
 import {openStore} from './store.mjs';
 import {resolve,dirname} from 'node:path';
 import {claudeService,mockData} from './adapters.mjs';
+import {aiProposerService} from './ai-proposer.mjs';
 import http from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {randomBytes,createHash,timingSafeEqual} from 'node:crypto';
@@ -19,6 +20,9 @@ const intakeMinutes=Number(process.env.MAIL_POLL_MINUTES||60);if(!Number.isFinit
 let intakeOwner=null,intakeStatus={enabled:intakeEnabled,running:false,state:'disabled',lastRun:null};
 if(mock&&(enabled||process.env.CLAUDE_ENABLED==='true'))throw Error('Mock mode cannot enable live providers');
 const claude=claudeService();
+const aiProposer=aiProposerService();
+const ownDomains=(process.env.OWN_MAIL_DOMAINS||'').toLowerCase().split(',').map(x=>x.trim()).filter(Boolean);
+const sentFolder=process.env.MAIL_SENT_FOLDER_ID||'';
 const env={tenant:process.env.MS_TENANT_ID,client:process.env.MS_CLIENT_ID,secret:process.env.MS_CLIENT_SECRET,redirect:process.env.MS_REDIRECT_URI||origin+'/auth/callback'};
 const scopes=['Mail.Read','Files.Read']; // Deliberately no write or send scopes.
 const dataMode=mock?'simulation':enabled?'real':'local';
@@ -43,8 +47,9 @@ function startReceiver(s){
  if(receiverTimer)clearInterval(receiverTimer);
  intakeStatus={enabled:true,running:true,state:'starting_baseline',lastRun:null};
  const stopAt=Date.now()+8*60*60*1000;
- const receiver=createReceiver({store,folder:process.env.MAIL_FOLDER_ID,scopeKey:s.account.homeAccountId,since:process.env.MAIL_START_AFTER,ownDomains:(process.env.OWN_MAIL_DOMAINS||'').toLowerCase().split(',').map(x=>x.trim()).filter(Boolean),get:path=>graph(s,path)});
- const run=async()=>{try{if(Date.now()>stopAt)throw Error('LOCAL_SESSION_EXPIRED');const out=await receiver.tick();intakeStatus={enabled:true,running:true,state:out.busy?'busy':out.baseline?'waiting_for_changes':'baseline',lastRun:new Date().toISOString()};}catch(e){clearInterval(receiverTimer);receiverTimer=null;intakeStatus={enabled:true,running:false,state:['GRAPH_THROTTLED_STOPPED','DELTA_EXPIRED_MANUAL_RESET_REQUIRED','LOCAL_SESSION_EXPIRED','RECEIVER_SCOPE_CHANGED_USE_NEW_WORKSPACE'].includes(e.message)?e.message:'STOPPED_REVIEW_CONFIGURATION_OR_REAUTHENTICATE',lastRun:new Date().toISOString()};}};
+ const receiver=createReceiver({store,folder:process.env.MAIL_FOLDER_ID,scopeKey:s.account.homeAccountId,since:process.env.MAIL_START_AFTER,ownDomains,proposer:aiProposer,get:path=>graph(s,path)});
+ const sent=sentFolder?createReceiver({store,folder:sentFolder,scopeKey:s.account.homeAccountId,since:process.env.MAIL_START_AFTER,ownDomains,stateKey:'receiverSent',kind:'sent',get:path=>graph(s,path)}):null;
+ const run=async()=>{try{if(Date.now()>stopAt)throw Error('LOCAL_SESSION_EXPIRED');const out=await receiver.tick();if(sent)await sent.tick();intakeStatus={enabled:true,running:true,state:out.busy?'busy':out.baseline?'waiting_for_changes':'baseline',lastRun:new Date().toISOString()};}catch(e){clearInterval(receiverTimer);receiverTimer=null;intakeStatus={enabled:true,running:false,state:['GRAPH_THROTTLED_STOPPED','DELTA_EXPIRED_MANUAL_RESET_REQUIRED','LOCAL_SESSION_EXPIRED','RECEIVER_SCOPE_CHANGED_USE_NEW_WORKSPACE'].includes(e.message)?e.message:'STOPPED_REVIEW_CONFIGURATION_OR_REAUTHENTICATE',lastRun:new Date().toISOString()};}};
  run();receiverTimer=setInterval(run,intakeMinutes*60000);receiverTimer.unref();
 }
 const assets={'/':'index.html','/index.html':'index.html','/app.mjs':'app.mjs','/core.mjs':'core.mjs','/integration.mjs':'integration.mjs','/shipments.mjs':'shipments.mjs','/shipments-ui.mjs':'shipments-ui.mjs','/catalog.mjs':'catalog.mjs','/style.css':'style.css','/setup':'setup.html','/setup.mjs':'setup.mjs'};
@@ -52,9 +57,9 @@ const server=http.createServer(async(req,res)=>{
  try{
  if(req.headers.host!==`localhost:${port}`&&req.headers.host!==`127.0.0.1:${port}`)return json(res,403,{error:'Invalid host'});
  if(req.headers.origin&&req.headers.origin!==origin)return json(res,403,{error:'Origin not allowed'});
- if(req.method!=='GET'&&!(req.method==='POST'&&['/api/claude/analyze','/api/workspace','/api/events/synthetic','/api/setup'].includes(req.url)))return json(res,405,{error:'No send or tenant write endpoint.'});
+ if(req.method!=='GET'&&!(req.method==='POST'&&['/api/claude/analyze','/api/workspace','/api/events/synthetic','/api/setup','/api/shipments/propose'].includes(req.url)))return json(res,405,{error:'No send or tenant write endpoint.'});
  const u=new URL(req.url,origin),s=session(req);
- if(u.pathname==='/api/status'){const ss=s||makeSession(res);ss.csrf||=token();return json(res,200,{graphConfigured:enabled,authenticated:!!s?.account,mock,mode:mock?'simulation-no-network':'read-only-development',permissions:scopes,clientType:env.secret?'confidential':'public',send:false,write:false,csrf:ss.csrf,workspace:true,receiver:{...intakeStatus,intervalMinutes:intakeMinutes},claude:mock?{ready:true,model:'simulation'}:claude.status});}
+ if(u.pathname==='/api/status'){const ss=s||makeSession(res);ss.csrf||=token();return json(res,200,{graphConfigured:enabled,authenticated:!!s?.account,mock,mode:mock?'simulation-no-network':'read-only-development',permissions:scopes,clientType:env.secret?'confidential':'public',send:false,write:false,csrf:ss.csrf,workspace:true,receiver:{...intakeStatus,intervalMinutes:intakeMinutes},claude:mock?{ready:true,model:'simulation'}:claude.status,aiProposer:{ready:aiProposer.ready||aiProposer.simulated,simulated:aiProposer.simulated,auto:aiProposer.auto,maxPerDay:aiProposer.maxPerDay},sentFolder:!!sentFolder});}
 
  if(u.pathname==='/api/setup'){
   if(req.method==='GET'){const cur=existsSync('.env')?parseEnv(readFileSync('.env','utf8')):{};return json(res,200,{envExists:existsSync('.env'),checks:validateConfig(cur),running:{graph:enabled,mock},note:'Los cambios se aplican al reiniciar el servidor.'});}
@@ -66,6 +71,15 @@ const server=http.createServer(async(req,res)=>{
   if(r.errors.length)return json(res,400,{error:'INVALID_CONFIG',details:r.errors});
   writeFileSync('.env',r.text,{mode:0o600});try{chmodSync('.env',0o600);}catch{}
   return json(res,200,{saved:true,restartRequired:true,checks:validateConfig(parseEnv(r.text))});
+ }
+ if(u.pathname==='/api/shipments/propose'){
+  if(req.method!=='POST'||req.headers.origin!==origin||!s||!same(s.csrf,req.headers['x-csrf-token']))return json(res,403,{error:'LOCAL_CONFIRMATION_REQUIRED'});
+  if(!aiProposer.ready&&!aiProposer.simulated)return json(res,503,{error:'AI_PROPOSER_NOT_CONFIGURED'});
+  let body='';for await(const chunk of req){body+=chunk;if(body.length>40000)return json(res,413,{error:'BODY_TOO_LARGE'});}
+  let i;try{i=JSON.parse(body);}catch{return json(res,400,{error:'INVALID_JSON'});}
+  if(i.confirm!==true||!i.mail||typeof i.mail.subject!=='string'||!Array.isArray(i.shipments))return json(res,400,{error:'INVALID_REQUEST'});
+  const r=await aiProposer.propose({mail:{subject:i.mail.subject,body:i.mail.body,from:i.mail.from},shipments:i.shipments.map(x=>({id:x.id,client:x.client,provider:x.provider,route:x.route,cargo:x.cargo,bultos:x.bultos,kg:x.kg}))});
+  return json(res,r.error?502:200,r);
  }
  if(u.pathname==='/api/dossier'){
   if(!s)return json(res,401,{error:'LOCAL_SESSION_REQUIRED'});const c=store.read().state.cases.find(c=>c.id===u.searchParams.get('id'));if(!c)return json(res,404,{error:'CASE_NOT_FOUND'});
@@ -84,7 +98,7 @@ const server=http.createServer(async(req,res)=>{
   if(req.method==='GET')return json(res,200,store.read());
   if(req.headers.origin!==origin||!same(s.csrf,req.headers['x-csrf-token']))return json(res,403,{error:'LOCAL_CONFIRMATION_REQUIRED'});
   let body='';for await(const chunk of req){body+=chunk;if(body.length>2000000)return json(res,413,{error:'WORKSPACE_TOO_LARGE'});}
-  try{const input=JSON.parse(body);const authoritative=store.read().state;if(authoritative.receiver)input.state.receiver=authoritative.receiver;return json(res,200,await store.write(input.revision,input.state));}catch(err){return json(res,err.message==='REVISION_CONFLICT'?409:400,{error:err.message==='REVISION_CONFLICT'?'REVISION_CONFLICT_RELOAD_BEFORE_EDITING':'INVALID_WORKSPACE'});}
+  try{const input=JSON.parse(body);const authoritative=store.read().state;if(authoritative.receiver)input.state.receiver=authoritative.receiver;if(authoritative.receiverSent)input.state.receiverSent=authoritative.receiverSent;return json(res,200,await store.write(input.revision,input.state));}catch(err){return json(res,err.message==='REVISION_CONFLICT'?409:400,{error:err.message==='REVISION_CONFLICT'?'REVISION_CONFLICT_RELOAD_BEFORE_EDITING':'INVALID_WORKSPACE'});}
  }
  if(u.pathname==='/api/claude/analyze'){
   if(req.headers.origin!==origin||!s||!same(s.csrf,req.headers['x-csrf-token']))return json(res,403,{error:'LOCAL_CONFIRMATION_REQUIRED'});
