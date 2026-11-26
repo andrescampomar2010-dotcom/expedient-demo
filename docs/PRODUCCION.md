@@ -41,3 +41,7 @@ Un solo proceso en un ordenador de desarrollo, datos sintéticos de formato unif
 
 - Si `APP_DATA_PATH` termina en `.db`, `server/store.mjs` usa SQLite (misma interfaz, transacción, rechazo de cambios concurrentes con `REVISION_CONFLICT`). Límites configurables: `APP_MAX_CASES` (50.000 por defecto) y `APP_MAX_KNOWLEDGE`. Con `.json` sigue el modo demo, con tope de 500 expedientes, que **no sirve** para un volumen diario alto de envíos.
 - Defectos de implementación pendientes (no son decisiones del cliente): `server/server.mjs` solo acepta `localhost` (comprobación de Host y Origin, callback fijo), así que falta una opción `APP_PUBLIC_URL` con HTTPS detrás de proxy; falta conectar `users.mjs` (pantalla de acceso y rol por ruta) y el script de instalación/servicio. Requisitos de configuración en destino (no son defectos): dominio y certificado, registro de la app en Entra, buzón, clave de IA si se activa.
+
+## Actualización: acceso y despliegue conectados
+
+Resuelto en código y probado con servidor real y datos sintéticos (`tests/server-auth.test.mjs`): `APP_PUBLIC_URL` (HTTPS tras proxy), `APP_BIND`, acceso local con roles conectado a todas las rutas `/api`, `/api/health`, rechazo de arrancar público sin autenticación, `npm run adduser`. Quedan sin cambios los otros defectos: lectura de adjuntos, alertas y capturas de la sugerencia de IA. Ver `docs/INSTALACION.md` y `deploy/`. Esto sustituye la frase anterior de que `server.mjs` solo acepta localhost y de que `users.mjs` no está conectado.
