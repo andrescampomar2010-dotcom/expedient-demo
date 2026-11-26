@@ -1,7 +1,8 @@
 // Lectura de adjuntos recibidos: PDF digital (pdfjs-dist, Apache-2.0) y XLSX (exceljs). Con límites de tamaño, páginas y tiempo.
-// Un documento sin texto (escaneo) NO se lee con OCR: se marca "sin texto" para que nadie crea que se leyó.
+// Un PDF sin texto (escaneo) se intenta con OCR local (server/ocr.mjs). Su texto queda aparte y marcado no verificado; nunca vincula por sí solo.
 export const LIMITS={maxBytes:5_000_000,maxPages:30,maxChars:60_000,timeoutMs:8000};
 import {Worker} from 'node:worker_threads';
+import {ocrPdf} from './ocr.mjs';
 const WORKER=new URL('./attachment-worker.mjs',import.meta.url);
 // El análisis corre en un hilo aparte con tope de memoria y se CANCELA (terminate) al agotar el tiempo: no sigue gastando CPU.
 function parseInWorker(kind,bytes,L,workerFile=WORKER){
@@ -22,7 +23,13 @@ export async function readAttachment({name,size,bytes},L=LIMITS,workerFile){
  if(!bytes)return{name,status:'error',note:'Contenido no disponible'};
  try{
   const r=await parseInWorker(kind,bytes,L,workerFile);
-  if(r.text.replace(/\s/g,'').length<20)return{name,status:'sin_texto',note:kind==='pdf'?'PDF sin texto (posible escaneo): no se leyó, no hay OCR':'Hoja sin contenido'};
+  if(r.text.replace(/\s/g,'').length<20){
+   if(kind!=='pdf')return{name,status:'sin_texto',note:'Hoja sin contenido'};
+   if(process.env.OCR_ENABLED==='false')return{name,status:'sin_texto',note:'PDF sin texto (posible escaneo): OCR desactivado, no se leyó'};
+   try{const o=await ocrPdf(bytes);if(o.text.replace(/\s/g,'').length<20)return{name,status:'sin_texto',note:'PDF escaneado: el OCR no obtuvo texto legible'};
+    return{name,status:'leido_ocr',ocr:{text:o.text,pages:o.pages,doubtful:o.doubtful,hints:o.hints},note:`Leído por OCR local (${o.pages} pág., límite ${5}): no verificado, confirma contra el original`+(o.doubtful.length?`; ${o.doubtful.length} palabras dudosas`:'')};
+   }catch(e){return e.message==='OCR_NO_DISPONIBLE'?{name,status:'ocr_no_disponible',note:'PDF escaneado: OCR no disponible en este equipo ('+e.detail+')'}:{name,status:'error',note:e.message==='TIMEOUT'?'OCR cancelado por tiempo':'OCR fallido: no se leyó'}}
+  }
   return{name,status:'leido',text:r.text,note:r.truncated?'Leído parcialmente por límite de tamaño':'Leído'};
  }catch(e){return e.message==='PASSWORD'?{name,status:'protegido',note:'PDF protegido con clave: no se leyó'}:{name,status:'error',note:e.message==='TIMEOUT'?'Tiempo de lectura agotado: se canceló la lectura':e.message==='MEMORY'?'Archivo demasiado pesado de procesar: no se leyó':'No se pudo leer el archivo'}}
 }
