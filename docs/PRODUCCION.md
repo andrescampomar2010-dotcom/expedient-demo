@@ -45,3 +45,6 @@ Un solo proceso en un ordenador de desarrollo, datos sintéticos de formato unif
 ## Actualización: acceso y despliegue conectados
 
 Resuelto en código y probado con servidor real y datos sintéticos (`tests/server-auth.test.mjs`): `APP_PUBLIC_URL` (HTTPS tras proxy), `APP_BIND`, acceso local con roles conectado a todas las rutas `/api`, `/api/health`, rechazo de arrancar público sin autenticación, `npm run adduser`. Quedan sin cambios los otros defectos: lectura de adjuntos, alertas y capturas de la sugerencia de IA. Ver `docs/INSTALACION.md` y `deploy/`. Esto sustituye la frase anterior de que `server.mjs` solo acepta localhost y de que `users.mjs` no está conectado.
+
+
+Nota: la lectura de contenido de adjuntos PDF y XLSX recibidos ya está implementada y probada con fixtures (ver `docs/INSTALACION.md`); OCR de escaneos sigue sin existir y se avisa. Sustituye el punto 4 de la lista anterior.
