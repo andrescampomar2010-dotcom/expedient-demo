@@ -26,3 +26,13 @@ Orientación genérica para dimensionar, **sin volumen real**: un equipo pequeñ
 **Medición (un solo ordenador de desarrollo, un solo proceso, datos ficticios, sin red ni concurrencia):** con 10.000 envíos y 50.000 correos, la ingesta tarda unos 0,12 ms por correo (mediana), la búsqueda por DUA ~1 ms y por palabras ~60 ms. El estado completo ocupa ~32 MB de JSON, y guardar el archivo entero en cada cambio es el cuello de botella real que queda: por eso el siguiente hito es SQLite o PostgreSQL. Esto no demuestra que varias personas simultáneas funcionen bien.
 
 **Sin implementar todavía:** base de datos transaccional, usuarios y roles reales (SSO o locales: decisión de la empresa), lectura de adjuntos, alertas. **Decisiones/permisos externos:** alojamiento, registro de app en Entra con consentimiento de admin, acceso a correo real, gasto y privacidad de la API de IA, retención RGPD.
+
+## Módulos añadidos, aún sin conectar al servidor
+
+- `server/store-sqlite.mjs` (SQLite con transacciones, control de versión y copia consistente) y `server/users.mjs` (contraseñas con scrypt, sesiones con caducidad, bloqueo por intentos, roles admin/operador/lector). Tienen tests (6 y 3), incluido un test con 4 hilos escribiendo a la vez sin perder escrituras.
+- **Falta**: conectar ambos a `server/server.mjs` (variable `APP_DB_PATH`, pantalla de acceso, comprobación de rol en cada ruta que escribe) y probar contra el servidor completo. Hasta entonces la app sigue guardando JSON y sin acceso con usuario.
+- Si la empresa elige SSO (Microsoft Entra ID), `users.mjs` se sustituye; los roles quedan igual.
+
+## Qué NO prueban las mediciones
+
+Un solo proceso en un ordenador de desarrollo, datos sintéticos de formato uniforme, 5 correos por envío (supuesto), sin red, sin Microsoft Graph, sin adjuntos, sin personas usando la interfaz a la vez y sin la escritura del JSON completo en cada cambio. Son útiles para detectar cuellos de botella, no para afirmar capacidad.
