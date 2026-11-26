@@ -1,6 +1,6 @@
 import * as S from './shipments.mjs';
 // Pantalla «Envíos»: ficha viva por envío, pendientes de relacionar, búsqueda y alta manual.
-export function shipmentsUI({ host, getState, save, esc, msg, demo }) {
+export function shipmentsUI({ host, getState, save, esc, msg, demo, ai }) {
   const st = () => getState();
   let sub = 'list', sel = '', q = '';
   const tag = (t, c = '') => `<span class="tag ${c}">${esc(t)}</span>`;
@@ -59,8 +59,10 @@ ${(s.conflicts || []).length ? `<h3>Datos que no coinciden con la ficha</h3>${s.
   function pending() {
     const P = S.ensure(st()).pending;
     if (!P.length) return '<p>No hay correos pendientes de relacionar.</p>';
-    return P.map(p => { const m = mailById(p.mailId); return `<section class="line">${mailBlock(m)}${m.facts?.kind === 'rechazo' ? tag('Rechazo sin relacionar con seguridad', 'warn') : ''}<p><small>${esc(p.why)}</small></p>
-${p.candidates.map(c => `<button data-sh="confirm" data-mail="${esc(p.mailId)}" data-id="${esc(c)}">Es de ${esc(c)}</button>`).join('')}<button data-sh="discard" data-mail="${esc(p.mailId)}">Descartar</button></section>`; }).join('');
+    return P.map(p => { const m = mailById(p.mailId); const a = p.ai;
+      const aiBox = a ? `<div class="notice"><strong>Sugerencia de IA${a.simulated ? ' (SIMULACIÓN, sin llamar a ninguna IA)' : ''}, no verificada:</strong> ${a.shipmentId ? esc(a.shipmentId) : 'ningún envío con seguridad'} · confianza ${esc(a.confidence)}<br>${esc(a.reason)}${a.outsideRules ? '<br><small>No coincide con las pistas de las reglas: compruébalo con más cuidado.</small>' : ''}</div>` : '';
+      return `<section class="line">${mailBlock(m)}${m.facts?.kind === 'rechazo' ? tag('Rechazo sin relacionar con seguridad', 'warn') : ''}<p><small>Reglas: ${esc(p.why)}</small></p>${aiBox}
+${a?.shipmentId ? `<button class="primary" data-sh="confirm" data-via="ai" data-mail="${esc(p.mailId)}" data-id="${esc(a.shipmentId)}">Aceptar sugerencia: es de ${esc(a.shipmentId)}</button>` : ''}${p.candidates.filter(c => c !== a?.shipmentId).map(c => `<button data-sh="confirm" data-mail="${esc(p.mailId)}" data-id="${esc(c)}">Es de ${esc(c)}</button>`).join('')}${ai?.ready() && !a ? `<button data-sh="ask" data-mail="${esc(p.mailId)}">Pedir sugerencia a la IA</button>` : ''}<button data-sh="discard" data-mail="${esc(p.mailId)}">Descartar</button></section>`; }).join('');
   }
 
   function results() {
@@ -90,7 +92,8 @@ ${p.candidates.map(c => `<button data-sh="confirm" data-mail="${esc(p.mailId)}" 
       else if (a === 'back') { sub = q && S.search(st(), q)?.length ? 'search' : 'list'; sel = ''; }
       else if (a === 'demo') { const x = S.demoState().shipments; x.demo = true; x.demoCursor = 0; st().shipments = x; save(); msg('Ejemplo ficticio cargado.'); }
       else if (a === 'simulate') { const x = S.ensure(st()); const m = S.DEMO_INBOX[x.demoCursor || 0]; if (!m) return; x.demoCursor = (x.demoCursor || 0) + 1; const r = S.ingestMail(st(), m); save(); msg(r.status === 'linked' ? `Correo añadido a ${r.shipmentId}. ${r.why}` : r.status === 'pending' ? 'Correo pendiente: ' + r.why : r.status === 'ignored' ? 'Correo sin relación con ningún envío.' : r.why); }
-      else if (a === 'confirm') { S.confirmPending(st(), d.mail, d.id); save(); msg(`Correo añadido a ${d.id} con su fuente.`); }
+      else if (a === 'ask') { const x = S.ensure(st()), m = mailById(d.mail); msg('Consultando a la IA…'); const r = await ai.ask({ subject: m.subject, body: m.body, from: m.from }, x.items.filter(i => i.status !== 'Entregado')); if (r.error) throw Error('IA: ' + r.error); S.attachProposal(st(), d.mail, r) ? msg('Sugerencia recibida. Es solo una propuesta: tú decides.') : msg('La IA devolvió un envío no válido; se ignora.'); save(); }
+      else if (a === 'confirm') { S.confirmPending(st(), d.mail, d.id, d.via); save(); msg(`Correo añadido a ${d.id} con su fuente.`); }
       else if (a === 'discard') { S.confirmPending(st(), d.mail, null); save(); msg('Correo descartado.'); }
       else if (a === 'create') { const v = k => host.querySelector('#ns-' + k)?.value.trim() || ''; S.addShipment(st(), { id: v('id'), route: v('route'), client: v('client'), clientDomain: v('clientDomain'), provider: v('provider'), providerDomain: v('providerDomain'), exp: v('exp'), dua: v('dua'), bultos: v('bultos'), kg: v('kg') }); save(); sub = 'list'; msg('Envío creado.'); }
       paint();
