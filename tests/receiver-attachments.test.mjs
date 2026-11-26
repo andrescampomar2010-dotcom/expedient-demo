@@ -1,3 +1,4 @@
+process.env.OCR_ENABLED='false';
 import test from 'node:test';import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';import {join} from 'node:path';import {tmpdir} from 'node:os';
 import {openStore} from '../server/store.mjs';import {createReceiver} from '../server/receiver.mjs';import {pdf} from './fixtures/mkpdf.mjs';
