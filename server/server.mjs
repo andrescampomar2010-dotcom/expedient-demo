@@ -12,6 +12,7 @@ import http from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {randomBytes,createHash,timingSafeEqual} from 'node:crypto';
 import {createUsers,can} from './users.mjs';
+import {failedStatus,alertLine,healthOf} from './health.mjs';
 const port=Number(process.env.PORT||4875);
 // Despliegue en destino: APP_PUBLIC_URL=https://expedient.empresa.example (HTTPS lo termina el proxy inverso) y APP_BIND=0.0.0.0 si el proxy está en otra máquina.
 const publicUrl=(process.env.APP_PUBLIC_URL||'').replace(/\/+$/,'');
@@ -62,7 +63,7 @@ function startReceiver(s){
  const stopAt=Date.now()+8*60*60*1000;
  const receiver=createReceiver({store,folder:process.env.MAIL_FOLDER_ID,scopeKey:s.account.homeAccountId,since:process.env.MAIL_START_AFTER,ownDomains,proposer:aiProposer,get:path=>graph(s,path)});
  const sent=sentFolder?createReceiver({store,folder:sentFolder,scopeKey:s.account.homeAccountId,since:process.env.MAIL_START_AFTER,ownDomains,stateKey:'receiverSent',kind:'sent',get:path=>graph(s,path)}):null;
- const run=async()=>{try{if(Date.now()>stopAt)throw Error('LOCAL_SESSION_EXPIRED');const out=await receiver.tick();if(sent)await sent.tick();intakeStatus={enabled:true,running:true,state:out.busy?'busy':out.baseline?'waiting_for_changes':'baseline',lastRun:new Date().toISOString()};}catch(e){clearInterval(receiverTimer);receiverTimer=null;intakeStatus={enabled:true,running:false,state:['GRAPH_THROTTLED_STOPPED','DELTA_EXPIRED_MANUAL_RESET_REQUIRED','LOCAL_SESSION_EXPIRED','RECEIVER_SCOPE_CHANGED_USE_NEW_WORKSPACE'].includes(e.message)?e.message:'STOPPED_REVIEW_CONFIGURATION_OR_REAUTHENTICATE',lastRun:new Date().toISOString()};}};
+ const run=async()=>{try{if(Date.now()>stopAt)throw Error('LOCAL_SESSION_EXPIRED');const out=await receiver.tick();if(sent)await sent.tick();intakeStatus={enabled:true,running:true,state:out.busy?'busy':out.baseline?'waiting_for_changes':'baseline',lastRun:new Date().toISOString()};}catch(e){clearInterval(receiverTimer);receiverTimer=null;intakeStatus=failedStatus(e);console.error(alertLine(intakeStatus));}};
  run();receiverTimer=setInterval(run,intakeMinutes*60000);receiverTimer.unref();
 }
 const assets={'/':'index.html','/index.html':'index.html','/app.mjs':'app.mjs','/core.mjs':'core.mjs','/integration.mjs':'integration.mjs','/shipments.mjs':'shipments.mjs','/shipments-ui.mjs':'shipments-ui.mjs','/catalog.mjs':'catalog.mjs','/style.css':'style.css','/setup':'setup.html','/setup.mjs':'setup.mjs'};
@@ -71,7 +72,7 @@ const LOGIN_HTML='<!doctype html><meta charset=utf-8><meta name=viewport content
 const server=http.createServer(async(req,res)=>{
  try{
  if(!allowedHosts.includes(req.headers.host))return json(res,403,{error:'Invalid host'});
- if(req.method==='GET'&&req.url==='/api/health')return json(res,200,{ok:true,auth:authLocal?'local':'none'});
+ if(req.method==='GET'&&req.url==='/api/health'){const h=healthOf(intakeStatus);return json(res,h.code,{...h.body,auth:authLocal?'local':'none'});}
  if(req.headers.origin&&req.headers.origin!==origin)return json(res,403,{error:'Origin not allowed'});
  if(req.method==='POST'&&req.url==='/api/login'){let b='';for await(const c of req){b+=c;if(b.length>4000)return json(res,413,{error:'BODY_TOO_LARGE'});}let i;try{i=JSON.parse(b)}catch{return json(res,400,{error:'INVALID_JSON'})}if(!authLocal)return json(res,404,{error:'AUTH_NOT_ENABLED'});if(req.headers.origin!==origin)return json(res,403,{error:'Origin not allowed'});const r=users.login(i.name,i.password);saveUsers();if(!r||r.locked)return json(res,r?.locked?429:401,{error:r?.locked?'ACCOUNT_LOCKED_TRY_LATER':'INVALID_CREDENTIALS'});res.setHeader('set-cookie',`uid=${r.token}; HttpOnly; SameSite=Strict; Path=/;${publicUrl?' Secure;':''} Max-Age=28800`);return json(res,200,{name:r.name,role:r.role});}
  if(req.method==='POST'&&req.url==='/api/logout'){users.logout(uidOf(req));saveUsers();res.setHeader('set-cookie','uid=; Max-Age=0; Path=/');return json(res,200,{ok:true});}
