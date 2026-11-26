@@ -19,3 +19,10 @@ test('backup consistente se puede abrir',()=>{
  const s=openStore(join(d,'b.db'));s.write('k',{z:1},0);const dest=join(d,'copy.db');s.backupTo(dest);s.close();
  assert.deepEqual(openStore(dest).read('k').value,{z:1});
 });
+test('apertura simultánea desde muchos procesos: no falla con "database is locked" (regresión: journal_mode sin busy_timeout)',async()=>{
+ const p=join(d,'open.db');openStore(p).write('n',{n:0},0);
+ const code=`const {workerData:w}=require('node:worker_threads');import(w.mod).then(({openStore})=>{const s=openStore(w.p);let i=0;while(i<20){const r=s.read('n');try{s.write('n',{n:r.value.n+1},r.ver);i++}catch(e){if(e.code!=='STALE_VERSION')throw e}}s.close();require('node:worker_threads').parentPort.postMessage(i)})`;
+ const mod=new URL('../server/store-sqlite.mjs',import.meta.url).href;
+ const res=await Promise.all(Array.from({length:30},()=>new Promise((ok,ko)=>{const w=new Worker(code,{eval:true,workerData:{p,mod}});w.on('message',ok);w.on('error',ko)})));
+ assert.equal(res.length,30);assert.equal(openStore(p).read('n').value.n,600);
+});
