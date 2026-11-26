@@ -25,6 +25,7 @@ export function openStore(path){
     db.exec('COMMIT');return expectedVer+1;
    }catch(e){db.exec('ROLLBACK');throw e}
   },
+  sql:db,
   backupTo(dest){db.exec('PRAGMA wal_checkpoint(TRUNCATE)');db.exec(`VACUUM INTO '${String(dest).replace(/'/g,"''")}'`)},
   close(){db.close()}
  };
