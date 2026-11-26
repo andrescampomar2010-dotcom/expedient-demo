@@ -62,3 +62,17 @@ test('HTTP: cambio de clave propio y administración de rol/restablecimiento',as
   const l=await (await fetch(base+'/api/users',{headers:{cookie:adm}})).json();assert.equal(l.users.length,2,'ninguna cuenta se borró');
  }finally{p.kill()}
 });
+test('modo producción (APP_AUTH=local, sin simulación): arranca vacío y la interfaz no muestra elementos de demostración',async()=>{
+ const d=mkdtempSync(join(tmpdir(),'prod-')),up=join(d,'users.json');
+ assert.equal(spawnSync(process.execPath,['scripts/adduser.mjs','jefa','admin'],{env:{...process.env,APP_USERS_PATH:up,ADDUSER_PASSWORD:'una-clave-larga-1'}}).status,0);
+ const p=await start({APP_AUTH:'local',APP_USERS_PATH:up,APP_DATA_PATH:join(d,'t.db'),INTEGRATION_MOCK:'false'});
+ try{
+  const base=`http://localhost:${PORT}`;
+  const l=await post('/api/login',{name:'jefa',password:'una-clave-larga-1'});const c=l.headers.get('set-cookie').split(';')[0];
+  const html=await(await fetch(base+'/',{headers:{cookie:c}})).text();
+  for(const x of ['DEMO LOCAL','Rol ficticio','DATOS FICTICIOS','Demo documental'])assert.ok(!html.includes(x),x);
+  const st=await(await fetch(base+'/api/status',{headers:{cookie:c}})).json();assert.equal(st.production,true);assert.equal(st.mock,false);
+  const w=await(await fetch(base+'/api/workspace',{headers:{cookie:c}})).json();
+  const s=w.state||{};assert.equal((s.cases||[]).length,0);assert.equal((s.shipments||[]).length,0);assert.equal((s.automation?.events||[]).length,0);
+ }finally{p.kill()}
+});
