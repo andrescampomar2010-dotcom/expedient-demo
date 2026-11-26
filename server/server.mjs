@@ -43,11 +43,11 @@ function startReceiver(s){
  if(receiverTimer)clearInterval(receiverTimer);
  intakeStatus={enabled:true,running:true,state:'starting_baseline',lastRun:null};
  const stopAt=Date.now()+8*60*60*1000;
- const receiver=createReceiver({store,folder:process.env.MAIL_FOLDER_ID,scopeKey:s.account.homeAccountId,since:process.env.MAIL_START_AFTER,get:path=>graph(s,path)});
+ const receiver=createReceiver({store,folder:process.env.MAIL_FOLDER_ID,scopeKey:s.account.homeAccountId,since:process.env.MAIL_START_AFTER,ownDomains:(process.env.OWN_MAIL_DOMAINS||'').toLowerCase().split(',').map(x=>x.trim()).filter(Boolean),get:path=>graph(s,path)});
  const run=async()=>{try{if(Date.now()>stopAt)throw Error('LOCAL_SESSION_EXPIRED');const out=await receiver.tick();intakeStatus={enabled:true,running:true,state:out.busy?'busy':out.baseline?'waiting_for_changes':'baseline',lastRun:new Date().toISOString()};}catch(e){clearInterval(receiverTimer);receiverTimer=null;intakeStatus={enabled:true,running:false,state:['GRAPH_THROTTLED_STOPPED','DELTA_EXPIRED_MANUAL_RESET_REQUIRED','LOCAL_SESSION_EXPIRED','RECEIVER_SCOPE_CHANGED_USE_NEW_WORKSPACE'].includes(e.message)?e.message:'STOPPED_REVIEW_CONFIGURATION_OR_REAUTHENTICATE',lastRun:new Date().toISOString()};}};
  run();receiverTimer=setInterval(run,intakeMinutes*60000);receiverTimer.unref();
 }
-const assets={'/':'index.html','/index.html':'index.html','/app.mjs':'app.mjs','/core.mjs':'core.mjs','/integration.mjs':'integration.mjs','/catalog.mjs':'catalog.mjs','/style.css':'style.css','/setup':'setup.html','/setup.mjs':'setup.mjs'};
+const assets={'/':'index.html','/index.html':'index.html','/app.mjs':'app.mjs','/core.mjs':'core.mjs','/integration.mjs':'integration.mjs','/shipments.mjs':'shipments.mjs','/shipments-ui.mjs':'shipments-ui.mjs','/catalog.mjs':'catalog.mjs','/style.css':'style.css','/setup':'setup.html','/setup.mjs':'setup.mjs'};
 const server=http.createServer(async(req,res)=>{
  try{
  if(req.headers.host!==`localhost:${port}`&&req.headers.host!==`127.0.0.1:${port}`)return json(res,403,{error:'Invalid host'});
