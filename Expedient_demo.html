@@ -362,8 +362,10 @@ const DEMO_INBOX = [
 return {ensure,blankShipments,demoState,DEMO_INBOX,ingestMail,confirmPending,addShipment,attachProposal,summarize,search,stats,fmt,ATT_LABEL};})();
 
 // Pantalla «Envíos»: ficha viva por envío, pendientes de relacionar, búsqueda y alta manual.
-function shipmentsUI({ host, getState, save, esc, msg, demo, ai }) {
-  const st = () => getState();
+function shipmentsUI({ host, getState, save, esc, msg, demo, ai, remote }) {
+  const cache = remote ? S.blankShipments() : null;
+  const st = () => (remote ? { shipments: cache } : getState());
+  let tok = 0, moreList = false;
   let sub = 'list', sel = '', q = '';
   const tag = (t, c = '') => `<span class="tag ${c}">${esc(t)}</span>`;
   const sh = id => S.ensure(st()).items.find(s => s.id === id);
@@ -372,7 +374,7 @@ function shipmentsUI({ host, getState, save, esc, msg, demo, ai }) {
   const demoLeft = () => { const x = S.ensure(st()); return x.demo ? S.DEMO_INBOX.length - (x.demoCursor || 0) : 0; };
 
   function head() {
-    const x = S.ensure(st()), k = S.stats(st());
+    const x = S.ensure(st()), k = remote ? remote.stats : S.stats(st());
     const btn = (v, label) => `<button class="${sub === v ? 'on' : ''}" data-sh="sub" data-v="${v}">${label}</button>`;
     return `<h2>Envíos</h2><div class="notice">Cada correo nuevo se suma a la ficha de su envío y actualiza el resumen. Si no se puede relacionar con seguridad, queda en Pendientes para que lo decidas.${x.demo ? ' <strong>Datos ficticios.</strong>' : ''}</div>
 <div class="line">${btn('list', `Envíos (${k.shipments})`)}${btn('pending', `Pendientes (${k.pending})`)}${btn('search', 'Buscar')}${btn('new', 'Nuevo envío')}</div>`;
@@ -387,7 +389,7 @@ ${m.rejectionOpen ? tag('Rechazo recibido y sin gestión posterior registrada', 
   }
 
   function card(s) {
-    const m = S.summarize(s);
+    const m = s.summary || S.summarize(s);
     return `<section class="line click" data-sh="open" data-id="${esc(s.id)}"><h3>${esc(s.id)} · ${esc(s.route || '')}</h3>
 <small>${esc(s.client)} · ${esc(s.provider)} · Exp. ${esc(s.exp || '–')} · DUA ${esc(s.dua || '–')} · ${num(s.bultos)} bultos · ${num(s.kg)} kg</small><br>
 ${tag(s.status)}${m.rejectionOpen ? tag('Rechazo sin gestión posterior', 'warn') : ''}${m.plateNow.map(p => tag(p.role + ' ' + p.value)).join('')}
@@ -395,10 +397,10 @@ ${tag(s.status)}${m.rejectionOpen ? tag('Rechazo sin gestión posterior', 'warn'
   }
 
   function list() {
-    const items = S.ensure(st()).items.slice().sort((a, b) => (S.summarize(b).rejectionOpen - S.summarize(a).rejectionOpen) || a.id.localeCompare(b.id));
+    const items = S.ensure(st()).items.slice().sort((a, b) => ((b.summary || S.summarize(b)).rejectionOpen - (a.summary || S.summarize(a)).rejectionOpen) || a.id.localeCompare(b.id));
     const sim = S.ensure(st()).demo ? `<button data-sh="simulate" ${demoLeft() ? '' : 'disabled'}>Simular llegada del siguiente correo (${demoLeft()} por llegar)</button>` : '';
     if (!items.length) return `<p>Aún no hay envíos. Crea uno en «Nuevo envío»${demo ? ' o carga el ejemplo ficticio' : ''}. Los correos que lleguen se relacionarán con ellos.</p>${demo ? '<button data-sh="demo">Cargar ejemplo ficticio</button>' : ''}`;
-    return sim + items.map(card).join('');
+    return sim + items.map(card).join('') + (remote && remote.next ? '<button data-sh="more">Cargar más envíos</button>' : '') + (remote ? `<p><small>Mostrando ${items.length} de ${remote.stats.shipments}.</small></p>` : '');
   }
 
   function mailBlock(m, mark) {
@@ -428,10 +430,10 @@ ${a?.shipmentId ? `<button class="primary" data-sh="confirm" data-via="ai" data-
   }
 
   function results() {
-    const r = S.search(st(), q);
+    const r = remote ? remote.results : S.search(st(), q);
     if (r === null) return '<div class="notice">Escribe un DUA, expediente, matrícula o palabras del correo. Prueba con un número de DUA o «matrícula camión».</div>';
     if (!r.length) return '<div class="notice"><strong>No he encontrado nada.</strong> Eso no significa que no haya llegado: puede estar en otro buzón, ser aún un correo pendiente, venir en un adjunto escaneado (la app no lee su texto) o usar otras palabras. La búsqueda es literal, no por significado.</div>';
-    return `<div class="notice">${r.length} envío(s).</div>` + r.map(x => `<div>${x.exact.length ? tag('Coincide por ' + x.exact.join(', '), 'ok') : ''}${card(sh(x.shipmentId))}</div>`).join('');
+    return `<div class="notice">${r.length} envío(s).</div>` + r.map(x => `<div>${x.exact.length ? tag('Coincide por ' + x.exact.join(', '), 'ok') : ''}${sh(x.shipmentId) ? card(sh(x.shipmentId)) : ''}</div>`).join('');
   }
 
   function form() {
@@ -439,7 +441,11 @@ ${a?.shipmentId ? `<button class="primary" data-sh="confirm" data-via="ai" data-
     return `<section class="line"><h3>Nuevo envío</h3>${f('id', 'Referencia del envío', 'TR-0500')}${f('route', 'Ruta')}${f('client', 'Cliente')}${f('clientDomain', 'Dominio de correo del cliente', 'cliente.example')}${f('provider', 'Proveedor de transporte')}${f('providerDomain', 'Dominio de correo del proveedor')}${f('exp', 'Expediente', 'EXP-2611-12')}${f('dua', 'Número de DUA')}${f('bultos', 'Bultos')}${f('kg', 'Kilos')}<button data-sh="create">Crear envío</button><p><small>Los dominios solo sirven para proponer, nunca para asignar solos.</small></p></section>`;
   }
 
-  function paint() {
+  async function paint(more = false) {
+    if (remote) { const t = ++tok; try { await remote.load({ sub, sel, q, more }, cache); } catch (err) { msg('No se pudo cargar: ' + err.message); } if (t !== tok) return; }
+    paintNow();
+  }
+  function paintNow() {
     const body = sub === 'detail' ? detail(sel, hitsSel) : sub === 'pending' ? pending() : sub === 'search' ? `<label>Buscar<input id="sh-q" value="${esc(q)}" placeholder="DUA, expediente, matrícula o palabras"></label><div id="sh-results">${results()}</div>` : sub === 'new' ? form() : list();
     host.innerHTML = (sub === 'detail' ? '' : head()) + `<div id="sh-body">${body}</div>`;
   }
@@ -451,31 +457,36 @@ ${a?.shipmentId ? `<button class="primary" data-sh="confirm" data-via="ai" data-
     try {
       if (a === 'sub') { sub = d.v; sel = ''; }
       else if (a === 'open') { sub = 'detail'; sel = d.id; hitsSel = []; }
-      else if (a === 'back') { sub = q && S.search(st(), q)?.length ? 'search' : 'list'; sel = ''; }
+      else if (a === 'back') { sub = q && (remote ? remote.results?.length : S.search(st(), q)?.length) ? 'search' : 'list'; sel = ''; }
+      else if (a === 'more') { await paint(true); return; }
       else if (a === 'demo') { const x = S.demoState().shipments; x.demo = true; x.demoCursor = 0; st().shipments = x; save(); msg('Ejemplo ficticio cargado.'); }
       else if (a === 'simulate') { const x = S.ensure(st()); const m = S.DEMO_INBOX[x.demoCursor || 0]; if (!m) return; x.demoCursor = (x.demoCursor || 0) + 1; const r = S.ingestMail(st(), m); save(); msg(r.status === 'linked' ? `Correo añadido a ${r.shipmentId}. ${r.why}` : r.status === 'pending' ? 'Correo pendiente: ' + r.why : r.status === 'ignored' ? 'Correo sin relación con ningún envío.' : r.why); }
-      else if (a === 'ask') { const x = S.ensure(st()), m = mailById(d.mail); msg('Consultando a la IA…'); const r = await ai.ask({ subject: m.subject, body: m.body, from: m.from }, x.items.filter(i => i.status !== 'Entregado')); if (r.error) throw Error('IA: ' + r.error); S.attachProposal(st(), d.mail, r) ? msg('Sugerencia recibida. Es solo una propuesta: tú decides.') : msg('La IA devolvió un envío no válido; se ignora.'); save(); }
-      else if (a === 'confirm') { S.confirmPending(st(), d.mail, d.id, d.via); save(); msg(`Correo añadido a ${d.id} con su fuente.`); }
-      else if (a === 'discard') { S.confirmPending(st(), d.mail, null); save(); msg('Correo descartado.'); }
-      else if (a === 'create') { const v = k => host.querySelector('#ns-' + k)?.value.trim() || ''; S.addShipment(st(), { id: v('id'), route: v('route'), client: v('client'), clientDomain: v('clientDomain'), provider: v('provider'), providerDomain: v('providerDomain'), exp: v('exp'), dua: v('dua'), bultos: v('bultos'), kg: v('kg') }); save(); sub = 'list'; msg('Envío creado.'); }
-      paint();
-    } catch (err) { msg({ SHIPMENT_ID_REQUIRED: 'Falta la referencia del envío.', SHIPMENT_EXISTS: 'Ya existe un envío con esa referencia.', NOT_PENDING: 'Ese correo ya se había resuelto.' }[err.message] || err.message); paint(); }
+      else if (a === 'ask') { const x = S.ensure(st()), m = mailById(d.mail); msg('Consultando a la IA…'); const open = remote ? await remote.openHeads() : x.items.filter(i => i.status !== 'Entregado'); const r = await ai.ask({ subject: m.subject, body: m.body, from: m.from }, open); if (r.error) throw Error('IA: ' + r.error); const ok = remote ? (await remote.op({ op: 'proposal', mailId: d.mail, proposal: r })).attached : S.attachProposal(st(), d.mail, r); ok ? msg('Sugerencia recibida. Es solo una propuesta: tú decides.') : msg('La IA devolvió un envío no válido; se ignora.'); if (!remote) save(); }
+      else if (a === 'confirm') { if (remote) await remote.op({ op: 'confirm', mailId: d.mail, shipmentId: d.id, via: d.via }); else { S.confirmPending(st(), d.mail, d.id, d.via); save(); } msg(`Correo añadido a ${d.id} con su fuente.`); }
+      else if (a === 'discard') { if (remote) await remote.op({ op: 'discard', mailId: d.mail }); else { S.confirmPending(st(), d.mail, null); save(); } msg('Correo descartado.'); }
+      else if (a === 'create') { const v = k => host.querySelector('#ns-' + k)?.value.trim() || ''; const data = { id: v('id'), route: v('route'), client: v('client'), clientDomain: v('clientDomain'), provider: v('provider'), providerDomain: v('providerDomain'), exp: v('exp'), dua: v('dua'), bultos: v('bultos'), kg: v('kg') }; if (remote) await remote.op({ op: 'create', data }); else { S.addShipment(st(), data); save(); } sub = 'list'; msg('Envío creado.'); }
+      await paint();
+    } catch (err) { msg({ SHIPMENT_ID_REQUIRED: 'Falta la referencia del envío.', SHIPMENT_EXISTS: 'Ya existe un envío con esa referencia.', NOT_PENDING: 'Ese correo ya se había resuelto.' }[err.message] || err.message); await paint(); }
   }
   function input(e) {
     if (e.target.id !== 'sh-q') return;
-    q = e.target.value; host.querySelector('#sh-results').innerHTML = results();
+    q = e.target.value; if (!remote) { host.querySelector('#sh-results').innerHTML = results(); return; }
+    clearTimeout(input.t); input.t = setTimeout(async () => { try { await remote.load({ sub: 'search', q }, cache); } catch (err) { msg('No se pudo buscar: ' + err.message); return; } const el = host.querySelector('#sh-results'); if (el && q === e.target.value) el.innerHTML = results(); }, 250);
   }
   host.addEventListener('click', click); host.addEventListener('input', input);
   paint();
   return () => { host.removeEventListener('click', click); host.removeEventListener('input', input); };
 }
 
+const SH=S;function createRemote(){return null}
+
+
 
 
 
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let disposeIntegration;
-const served=(location.protocol==='https:'||(location.protocol==='http:'&&['localhost','127.0.0.1'].includes(location.hostname)));let liveMode=false;if(served)import('/admin-ui.mjs').then(m=>m.mountAdmin()).catch(()=>{});if(served)fetch('/api/status',{credentials:'same-origin'}).then(r=>r.json()).then(t=>{liveMode=(!!t.graphConfigured&&!t.mock)||!!t.production;window.PRODUCTION=!!t.production;aiReady=!!t.aiProposer?.ready;if(liveMode)render();}).catch(()=>{});
+const served=(location.protocol==='https:'||(location.protocol==='http:'&&['localhost','127.0.0.1'].includes(location.hostname)));let liveMode=false,remote=null;if(served)import('/admin-ui.mjs').then(m=>m.mountAdmin()).catch(()=>{});if(served)fetch('/api/status',{credentials:'same-origin'}).then(r=>r.json()).then(t=>{liveMode=(!!t.graphConfigured&&!t.mock)||!!t.production;if(t.shipmentsApi&&!remote)remote=createRemote(SH);window.PRODUCTION=!!t.production;aiReady=!!t.aiProposer?.ready;if(liveMode||remote)render();}).catch(()=>{});
 let aiReady=false;
 async function askAi(mail,shipments){const st=await(await fetch('/api/status',{credentials:'same-origin'})).json();const r=await fetch('/api/shipments/propose',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','x-csrf-token':st.csrf},body:JSON.stringify({confirm:true,mail,shipments})});return await r.json();}
 let workspaceRevision=0,csrf='',actor='Coordinador',saving=false;
@@ -488,7 +499,7 @@ function msg(t){$('#message').textContent=t;$('#message').hidden=false;}
 function download(name,text,type='application/json'){const u=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),2000);}
 function status(c){return {draft:'En preparación',reviewed:'Revisado · demo',assigned:'Asignado · aviso local'}[c.status];}
 function render(){disposeIntegration?.();disposeIntegration=null;save();$('#nav').innerHTML=['cases','shipments','inbox','knowledge','connections','automation'].map((v,i)=>`<button class="${view===v?'on':''}" data-view="${v}">${['Expedientes','Envíos','Avisos y borradores','Conocimiento','Conexiones','Automatización'][i]}</button>`).join('');
- if(view==='shipments')disposeIntegration=shipmentsUI({host:$('#content'),getState:()=>state,save,esc,msg,demo:!liveMode,ai:{ready:()=>aiReady,ask:askAi}});if(view==='automation')renderAutomation();if(view==='cases')renderCases();if(view==='inbox')renderInbox();if(view==='knowledge')renderKnowledge();if(view==='connections')renderConnections();}
+ if(view==='shipments')disposeIntegration=shipmentsUI({host:$('#content'),getState:()=>state,save,esc,msg,demo:!liveMode,remote,ai:{ready:()=>aiReady,ask:askAi}});if(view==='automation')renderAutomation();if(view==='cases')renderCases();if(view==='inbox')renderInbox();if(view==='knowledge')renderKnowledge();if(view==='connections')renderConnections();}
 function renderCases(){const c=get();$('#content').innerHTML=`<section class="toolbar"><button class="primary" data-action="new">Crear expediente</button>${liveMode?'':'<button data-action="sample">Cargar ejemplo ficticio</button>'}<button data-action="backup">Exportar datos locales</button></section><div class="layout"><aside><h2>Tu bandeja</h2>${state.cases.filter(x=>actor==='Coordinador'||x.agent===actor||x.routing?.agent===actor).map(x=>`<button class="case ${selected===x.id?'selected':''}" data-case="${x.id}"><strong>${esc(x.title)}</strong><span>${esc(status(x))}</span><small>${x.lines.length} líneas · ${esc(x.agent||x.routing?.agent||'Sin responsable')}</small></button>`).join('')||'<p>No hay expedientes. Crea uno o carga el ejemplo.</p>'}</aside><article>${c?detail(c):'<h2>Del documento a la revisión</h2><p>Crea un expediente, importa líneas CSV o añádelas a mano, propone códigos desde referencias y revisa antes de asignar.</p><div class="notice">Solo datos ficticios. No conecta cuentas ni presenta o envía documentos. Los motores de proveedor no están integrados.</div>'}</article></div>`;}
 function detail(c){const t=C.totals(c),i=C.issues(c);return `<div class="heading"><div><span class="badge">${esc(status(c))}</span><h2>${esc(c.title)}</h2><p>${esc(c.provider)} · ${esc(c.agent||'Sin asignar')}</p></div><button data-action="dossier">Descargar expediente JSON</button></div><div class="notice">DEMO NO DECLARABLE. Un formato HS correcto no prueba que exista o sea aplicable. Los documentos son ficticios. Los candidatos oficiales acotados no equivalen a clasificación legal ni TARIC10.</div><div class="fields"><label>Nombre<input data-field="title" value="${esc(c.title)}"></label><label>Perfil<select data-field="provider">${[...new Set([c.provider,'Formato genérico','Motor proveedor A pendiente','Motor proveedor B pendiente'])].map(x=>`<option ${x===c.provider?'selected':''}>${x}</option>`).join('')}</select></label><label>Valor esperado (EUR)<input type="number" min="0" step="0.01" data-field="expectedValue" value="${esc(c.expectedValue)}"></label><label>Peso neto esperado (kg)<input type="number" min="0" step="0.01" data-field="expectedNet" value="${esc(c.expectedNet)}"></label></div>${c.preparation?preparationView(c):''}<h3>Líneas del expediente</h3><div class="actions"><button data-action="add-line">Añadir línea</button><button data-action="csv-in">Importar CSV</button><button data-action="csv-template">Plantilla ficticia CSV</button>${!c.automation?'<button data-action="propose">Proponer HS desde referencias locales</button>':''}</div><p class="muted">Coincidencia exacta de descripción + material. Sin coincidencia o con contradicción: queda pendiente. Nunca asigna un código por intuición.</p>${c.lines.map((l,n)=>`<section class="line"><h4>Línea ${n+1} · ${esc(l.ref||'Sin referencia')}</h4>${l.decision?decisionView(l):''}<div class="fields">${[['ref','Referencia'],['description','Descripción'],['material','Material'],['hs','HS propuesto / revisado'],['value','Valor EUR'],['net','Neto kg'],['source','Fuente / fila']].map(([k,label])=>`<label>${label}<input data-line="${l.id}" data-key="${k}" value="${esc(l[k])}" ${['value','net'].includes(k)?'type="number" min="0" step="0.01"':''}></label>`).join('')}</div>${l.proposal?`<p class="notice">${esc(l.proposal)}</p>`:''}<label class="check"><input type="checkbox" data-confirm="${l.id}" ${l.confirmed?'checked':''}>He revisado esta línea (demostración)</label><button data-remove="${l.id}">Quitar línea</button></section>`).join('')||'<p>Sin líneas.</p>'}<h3>Documentos y observaciones</h3><label>Añadir documento de texto ficticio (.txt)<input type="file" id="docfile" accept=".txt"></label><p class="muted">Se guarda su contenido en este navegador y en las exportaciones. No añadas documentos reales a esta demo.</p>${c.documents.map(d=>`<p>${esc(d.name)} · ${d.text.length} caracteres</p>`).join('')}<label>Notas<textarea data-field="notes">${esc(c.notes)}</textarea></label><div class="totals"><span>Valor calculado <strong>${t.value.toFixed(2)} EUR</strong></span><span>Neto calculado <strong>${t.net.toFixed(2)} kg</strong></span></div><h3>Revisión</h3>${i.length?`<ul class="warnings">${i.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:'<p class="ok">'+(c.reviewedAt?'Revisión de demostración registrada.':'Comprobaciones locales superadas. Falta confirmar la revisión humana.')+'</p>'}<div class="actions"><button class="primary" data-action="review">Confirmar revisión del expediente</button><select id="agent"><option value="">Elegir responsable ficticio</option><option>Operador A</option><option>Operador B</option></select><button data-action="assign">Asignar y crear aviso local</button><button data-action="draft">Preparar borrador</button><button data-action="csv-out">Exportar líneas CSV</button></div><h3>Trazabilidad</h3><ul>${c.audit.map(a=>`<li>${esc(new Date(a.at).toLocaleString('es-ES'))} · ${esc(a.action)}</li>`).join('')}</ul>`;}
 function renderInbox(){$('#content').innerHTML=`<h2>Avisos y borradores</h2><div class="notice">Avisos dentro de la app. En modo servidor se comparten al guardar y recargar el espacio. No se envían correos ni notificaciones externas.</div><h3>Avisos de asignación</h3>${state.notices.filter(n=>actor==='Coordinador'||n.to===actor).map(n=>`<section class="line"><strong>${esc(n.to)}</strong><p>${esc(n.text)}</p>${!state.cases.find(c=>c.id===n.caseId)?.reviewedAt?'<p class="notice">Aviso desactualizado: expediente modificado, pendiente de nueva revisión.</p>':''}<span class="badge">${n.read?'Leído localmente':'Sin leer localmente'}</span><button data-read="${n.id}">Marcar leído</button></section>`).join('')||'<p>No hay avisos.</p>'}<h3>Borradores para revisión</h3>${state.drafts.map(d=>`<section class="line"><label>Destinatario ficticio<input data-draft="${d.id}" data-dkey="to" value="${esc(d.to)}"></label><label>Asunto<input data-draft="${d.id}" data-dkey="subject" value="${esc(d.subject)}"></label><label>Cuerpo<textarea data-draft="${d.id}" data-dkey="body">${esc(d.body)}</textarea></label><p>Estado: ${state.cases.find(c=>c.id===d.caseId)?.reviewedAt?'borrador local, no enviado':'desactualizado: expediente modificado, volver a revisar'}.</p><button data-download-draft="${d.id}">Descargar borrador TXT</button></section>`).join('')||'<p>No hay borradores.</p>'}`;}
