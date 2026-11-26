@@ -13,11 +13,12 @@ export function openShipmentsDb(path,{ownDomains=[]}={}){
  if(db.prepare('PRAGMA journal_mode').get().journal_mode!=='wal')db.exec('PRAGMA journal_mode=WAL;');
  db.exec('PRAGMA synchronous=NORMAL;');
  db.exec(`CREATE TABLE IF NOT EXISTS ship(id TEXT PRIMARY KEY,ver INTEGER NOT NULL,status TEXT NOT NULL,open INTEGER NOT NULL,rej INTEGER NOT NULL,dua TEXT,exp TEXT,updated TEXT NOT NULL,sum TEXT NOT NULL,json TEXT NOT NULL,hay TEXT NOT NULL);
- CREATE INDEX IF NOT EXISTS ship_open ON ship(open,rej,id);CREATE INDEX IF NOT EXISTS ship_dua ON ship(dua);CREATE INDEX IF NOT EXISTS ship_exp ON ship(exp);
+ CREATE INDEX IF NOT EXISTS ship_open ON ship(open,rej,id);CREATE INDEX IF NOT EXISTS ship_order ON ship(rej DESC,id);CREATE INDEX IF NOT EXISTS ship_dua ON ship(dua);CREATE INDEX IF NOT EXISTS ship_exp ON ship(exp);
  CREATE TABLE IF NOT EXISTS mail(id TEXT PRIMARY KEY,ship_id TEXT,thread_id TEXT,date TEXT,json TEXT NOT NULL,hay TEXT NOT NULL,hayc TEXT NOT NULL);
  CREATE INDEX IF NOT EXISTS mail_ship ON mail(ship_id,date);CREATE INDEX IF NOT EXISTS mail_thread ON mail(thread_id);
  CREATE TABLE IF NOT EXISTS pending(mail_id TEXT PRIMARY KEY,seq INTEGER NOT NULL,json TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY,v TEXT NOT NULL);`);
+ CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY,v TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS seen(scope TEXT NOT NULL,id TEXT NOT NULL,ver TEXT NOT NULL,PRIMARY KEY(scope,id));`);
  const q=sql=>db.prepare(sql);
  const own=()=>{const r=q('SELECT v FROM meta WHERE k=?').get('ownDomains');return r?JSON.parse(r.v):ownDomains};
  if(ownDomains.length)q('INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run('ownDomains',JSON.stringify(ownDomains));
@@ -65,6 +66,10 @@ export function openShipmentsDb(path,{ownDomains=[]}={}){
   catch(e){try{db.exec('ROLLBACK')}catch{}throw e}
  }
  const api={
+  getRec(key){const r=q('SELECT v FROM meta WHERE k=?').get('rcv:'+key);return r?{...JSON.parse(r.v),seen:{}}:null},
+  putRec(key,rec,seen){const {seen:_,...rest}=rec;db.exec('BEGIN IMMEDIATE');try{q('INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run('rcv:'+key,JSON.stringify(rest));const st=q('INSERT INTO seen(scope,id,ver) VALUES(?,?,?) ON CONFLICT(scope,id) DO UPDATE SET ver=excluded.ver');for(const [id,v] of Object.entries(seen||{}))st.run(key,id,String(v));db.exec('COMMIT')}catch(e){try{db.exec('ROLLBACK')}catch{}throw e}},
+  seenGet(key,id){const r=q('SELECT ver FROM seen WHERE scope=? AND id=?').get(key,id);return r?r.ver:undefined},
+  seenCount(key){return q('SELECT count(*) n FROM seen WHERE scope=?').get(key).n},
   setOwnDomains(d){q('INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run('ownDomains',JSON.stringify(d))},
   ingest(mailIn){
    const x=S.extract({...mailIn,attachments:mailIn.attachments||[]});
