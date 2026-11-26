@@ -12,6 +12,8 @@ import http from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {randomBytes,createHash,timingSafeEqual} from 'node:crypto';
 import {createUsers,can} from './users.mjs';
+import {assertNode} from './runtime-check.mjs';
+assertNode();
 import {failedStatus,alertLine,healthOf} from './health.mjs';
 const port=Number(process.env.PORT||4875);
 // Despliegue en destino: APP_PUBLIC_URL=https://expedient.empresa.example (HTTPS lo termina el proxy inverso) y APP_BIND=0.0.0.0 si el proxy está en otra máquina.
