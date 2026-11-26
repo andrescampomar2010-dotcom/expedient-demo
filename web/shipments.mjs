@@ -33,8 +33,9 @@ const num = s => Number(String(s).replace(/\./g, '').replace(',', '.'));
 const domainOf = a => String(a || '').toLowerCase().split('@').pop().trim();
 const ts = d => Date.parse(d) || 0;
 
+export const ATT_LABEL = { leido: 'leído', sin_texto: 'sin texto: no leído, posible escaneo', demasiado_grande: 'demasiado grande: no leído', no_soportado: 'contenido no leído', error: 'no se pudo leer' };
 export function extract(mail) {
-  const text = `${mail.subject || ''}\n${mail.body || ''}\n${(mail.attachments || []).join(' ')}`;
+  const text = `${mail.subject || ''}\n${mail.body || ''}\n${(mail.attachments || []).join(' ')}\n${String(mail.attachmentText || '').slice(0, 60000)}`;
   const duas = [...new Set((text.match(/\b\d{2}[A-Za-z]{2}\d{10,16}[A-Za-z]?\b/g) || []).map(x => x.toUpperCase()))];
   const exps = [...new Set([...text.matchAll(/\bEXP[-\s]?(\d{4})[-\s]?(\d{1,3})\b/gi)].map(m => `EXP-${m[1]}-${m[2].padStart(2, '0')}`))];
   const refs = [...new Set((text.match(/\bTR-\d{3,5}\b/gi) || []).map(x => x.toUpperCase()))];
@@ -117,7 +118,7 @@ function makeEvent(mail, x, shipment) {
     id: 'ev-' + mail.id, date: mail.date, side, kind, rejection: kind === 'rechazo',
     text: side === 'info' && kind === 'info' ? mail.subject : label,
     mailId: mail.id,
-    source: `Correo ${fmt(mail.date)} de ${mail.from}: «${mail.subject}»`
+    source: `Correo ${fmt(mail.date)} de ${mail.from}: «${mail.subject}»` + (mail.attachmentsInfo?.length ? ' · Adjuntos: ' + mail.attachmentsInfo.map(a => `${a.name} (${ATT_LABEL[a.status] || a.status})`).join(', ') : '')
   };
 }
 
@@ -245,7 +246,7 @@ const HAY = new WeakMap();
 const clean = t => norm(t).replace(/[^a-z0-9ñ ]/g, ' ');
 function hayOf(s, m) {
   let mh = HAY.get(m);
-  if (mh === undefined) { mh = clean([m.subject, m.body, m.from, (m.attachments || []).join(' ')].join(' ')); HAY.set(m, mh); }
+  if (mh === undefined) { mh = clean([m.subject, m.body, m.from, (m.attachments || []).join(' '), m.attachmentText || ''].join(' ')); HAY.set(m, mh); }
   let sh = HAY.get(s); const key = [s.id, s.exp, s.dua, s.client, s.provider].join(' ');
   if (!sh || sh.key !== key) { sh = { key, h: clean(key) }; HAY.set(s, sh); }
   return sh.h + ' ' + mh;
