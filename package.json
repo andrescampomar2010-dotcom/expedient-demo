@@ -19,7 +19,7 @@
     "pdfjs-dist": "6.5.438"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "overrides": {
     "exceljs": {
