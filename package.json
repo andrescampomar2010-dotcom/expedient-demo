@@ -10,7 +10,8 @@
     "demo": "node --env-file-if-exists=.env server/server.mjs",
     "demo:simulated": "node --env-file=simulation.env server/server.mjs",
     "setup": "node scripts/setup.mjs",
-    "doctor": "node scripts/doctor.mjs"
+    "doctor": "node scripts/doctor.mjs",
+    "adduser": "node scripts/adduser.mjs"
   },
   "dependencies": {
     "@azure/msal-node": "7.2.3",
