@@ -11,7 +11,20 @@ import {aiProposerService} from './ai-proposer.mjs';
 import http from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {randomBytes,createHash,timingSafeEqual} from 'node:crypto';
-const port=Number(process.env.PORT||4875),origin=`http://localhost:${port}`;
+import {createUsers,can} from './users.mjs';
+const port=Number(process.env.PORT||4875);
+// Despliegue en destino: APP_PUBLIC_URL=https://expedient.empresa.example (HTTPS lo termina el proxy inverso) y APP_BIND=0.0.0.0 si el proxy está en otra máquina.
+const publicUrl=(process.env.APP_PUBLIC_URL||'').replace(/\/+$/,'');
+if(publicUrl&&!/^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(publicUrl))throw Error('APP_PUBLIC_URL debe ser https://dominio[:puerto] sin ruta');
+const origin=publicUrl||`http://localhost:${port}`,bindHost=process.env.APP_BIND||'127.0.0.1';
+const allowedHosts=publicUrl?[new URL(publicUrl).host]:[`localhost:${port}`,`127.0.0.1:${port}`];
+const authLocal=process.env.APP_AUTH==='local';
+const usersPath=resolve(process.env.APP_USERS_PATH||'data/users.json');
+const users=createUsers(authLocal&&existsSync(usersPath)?JSON.parse(readFileSync(usersPath,'utf8')):undefined);
+const saveUsers=()=>{mkdirSync(dirname(usersPath),{recursive:true});writeFileSync(usersPath,JSON.stringify(users.doc),{mode:0o600});};
+if(authLocal&&!Object.keys(users.doc.users).length)throw Error('APP_AUTH=local sin usuarios: ejecuta npm run adduser');
+if(publicUrl&&!authLocal&&process.env.APP_ALLOW_NO_AUTH!=='true')throw Error('Con APP_PUBLIC_URL hace falta APP_AUTH=local (o un proxy con SSO y APP_ALLOW_NO_AUTH=true)');
+const uidOf=req=>(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('uid='))?.slice(4);
 const enabled=process.env.GRAPH_ENABLED==='true';
 const mock=process.env.INTEGRATION_MOCK==='true';
 const intakeEnabled=process.env.MAIL_INTAKE_ENABLED==='true';
@@ -39,7 +52,7 @@ if(enabled){if(!env.tenant||!env.client)throw Error('Graph enabled but configura
 const json=(res,code,value)=>{res.writeHead(code,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});res.end(JSON.stringify(value));};
 const token=()=>randomBytes(32).toString('base64url');
 function session(req){const id=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('sid='))?.slice(4);const s=id&&sessions.get(id);if(s&&s.expires>Date.now()){s.expires=Date.now()+idleMs;return s;}if(id)sessions.delete(id);return null;}
-function makeSession(res){const id=token(),s={expires:Date.now()+idleMs};sessions.set(id,s);res.setHeader('set-cookie',`sid=${id}; HttpOnly; SameSite=Lax; Path=/; Max-Age=1800`);return s;}
+function makeSession(res){const id=token(),s={expires:Date.now()+idleMs};sessions.set(id,s);res.setHeader('set-cookie',`sid=${id}; HttpOnly; SameSite=Lax; Path=/;${publicUrl?' Secure;':''} Max-Age=1800`);return s;}
 function same(a,b){return typeof a==='string'&&typeof b==='string'&&a.length===b.length&&timingSafeEqual(Buffer.from(a),Buffer.from(b));}
 async function graph(s,path){if(!s.account)throw Error('AUTH_REQUIRED');const msal=makeClient();msal.getTokenCache().deserialize(s.cache);const auth=await msal.acquireTokenSilent({account:s.account,scopes});s.cache=msal.getTokenCache().serialize();const r=await fetch('https://graph.microsoft.com/v1.0'+path,{headers:{Authorization:'Bearer '+auth.accessToken,Prefer:'IdType="ImmutableId", outlook.body-content-type="text"'},redirect:'error',signal:AbortSignal.timeout(20000)});if(!r.ok){const e=Error(r.status===429?'GRAPH_THROTTLED_STOPPED':r.status===410?'DELTA_EXPIRED_MANUAL_RESET_REQUIRED':'GRAPH_READ_FAILED');e.status=r.status;throw e;}const chunks=[];let size=0;for await(const chunk of r.body){size+=chunk.length;if(size>3000000){await r.body?.cancel?.().catch(()=>{});throw Error('GRAPH_RESPONSE_TOO_LARGE');}chunks.push(chunk);}return JSON.parse(Buffer.concat(chunks).toString('utf8'));}
 let receiverTimer;
@@ -53,10 +66,18 @@ function startReceiver(s){
  run();receiverTimer=setInterval(run,intakeMinutes*60000);receiverTimer.unref();
 }
 const assets={'/':'index.html','/index.html':'index.html','/app.mjs':'app.mjs','/core.mjs':'core.mjs','/integration.mjs':'integration.mjs','/shipments.mjs':'shipments.mjs','/shipments-ui.mjs':'shipments-ui.mjs','/catalog.mjs':'catalog.mjs','/style.css':'style.css','/setup':'setup.html','/setup.mjs':'setup.mjs'};
+const u0=x=>x.split('?')[0];
+const LOGIN_HTML='<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width"><title>Acceso</title><style>body{font:16px system-ui;max-width:320px;margin:20vh auto;padding:0 16px}input,button{width:100%;padding:10px;margin:6px 0;box-sizing:border-box}</style><h1>Expedient</h1><form id=f><input name=name placeholder=Usuario autocomplete=username required><input name=password type=password placeholder=Clave autocomplete=current-password required><button>Entrar</button><p id=m></p></form><script>f.onsubmit=async e=>{e.preventDefault();const r=await fetch("/api/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:f.name.value,password:f.password.value})});if(r.ok)location="/";else m.textContent=r.status===429?"Cuenta bloqueada unos minutos":"Usuario o clave incorrectos"}</script>';
 const server=http.createServer(async(req,res)=>{
  try{
- if(req.headers.host!==`localhost:${port}`&&req.headers.host!==`127.0.0.1:${port}`)return json(res,403,{error:'Invalid host'});
+ if(!allowedHosts.includes(req.headers.host))return json(res,403,{error:'Invalid host'});
+ if(req.method==='GET'&&req.url==='/api/health')return json(res,200,{ok:true,auth:authLocal?'local':'none'});
  if(req.headers.origin&&req.headers.origin!==origin)return json(res,403,{error:'Origin not allowed'});
+ if(req.method==='POST'&&req.url==='/api/login'){let b='';for await(const c of req){b+=c;if(b.length>4000)return json(res,413,{error:'BODY_TOO_LARGE'});}let i;try{i=JSON.parse(b)}catch{return json(res,400,{error:'INVALID_JSON'})}if(!authLocal)return json(res,404,{error:'AUTH_NOT_ENABLED'});if(req.headers.origin!==origin)return json(res,403,{error:'Origin not allowed'});const r=users.login(i.name,i.password);saveUsers();if(!r||r.locked)return json(res,r?.locked?429:401,{error:r?.locked?'ACCOUNT_LOCKED_TRY_LATER':'INVALID_CREDENTIALS'});res.setHeader('set-cookie',`uid=${r.token}; HttpOnly; SameSite=Strict; Path=/;${publicUrl?' Secure;':''} Max-Age=28800`);return json(res,200,{name:r.name,role:r.role});}
+ if(req.method==='POST'&&req.url==='/api/logout'){users.logout(uidOf(req));saveUsers();res.setHeader('set-cookie','uid=; Max-Age=0; Path=/');return json(res,200,{ok:true});}
+ if(authLocal&&req.method==='GET'&&u0(req.url)==='/login'){res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'"});return res.end(LOGIN_HTML);}
+ if(authLocal&&req.method==='GET'&&!req.url.startsWith('/api/')&&!users.check(uidOf(req))){res.writeHead(302,{location:'/login'});return res.end();}
+ if(authLocal&&req.url.startsWith('/api/')){const who=users.check(uidOf(req));if(!who)return json(res,401,{error:'LOGIN_REQUIRED'});if(req.method!=='GET'&&!can(who.role,'write'))return json(res,403,{error:'ROLE_CANNOT_WRITE'});}
  if(req.method!=='GET'&&!(req.method==='POST'&&['/api/claude/analyze','/api/workspace','/api/events/synthetic','/api/setup','/api/shipments/propose'].includes(req.url)))return json(res,405,{error:'No send or tenant write endpoint.'});
  const u=new URL(req.url,origin),s=session(req);
  if(u.pathname==='/api/status'){const ss=s||makeSession(res);ss.csrf||=token();return json(res,200,{graphConfigured:enabled,authenticated:!!s?.account,mock,mode:mock?'simulation-no-network':'read-only-development',permissions:scopes,clientType:env.secret?'confidential':'public',send:false,write:false,csrf:ss.csrf,workspace:true,receiver:{...intakeStatus,intervalMinutes:intakeMinutes},claude:mock?{ready:true,model:'simulation'}:claude.status,aiProposer:{ready:aiProposer.ready||aiProposer.simulated,simulated:aiProposer.simulated,auto:aiProposer.auto,maxPerDay:aiProposer.maxPerDay},sentFolder:!!sentFolder});}
@@ -135,5 +156,5 @@ const server=http.createServer(async(req,res)=>{
  json(res,404,{error:'Not found'});
  }catch(err){json(res,500,{error:err.message==='AUTH_REQUIRED'?'SIGN_IN_REQUIRED':'Request failed. Review server configuration without logging tokens.'});}
 });
-server.listen(port,'127.0.0.1',()=>console.log(`Development demo: ${origin}; Graph ${enabled?'configured, sign-in required':'disabled'}`));
+server.listen(port,bindHost,()=>console.log(`Development demo: ${origin}; Graph ${enabled?'configured, sign-in required':'disabled'}`));
 setInterval(()=>{for(const [id,s] of sessions)if(s.expires<Date.now())sessions.delete(id);},60000).unref();
