@@ -26,6 +26,20 @@ export function createUsers(doc={users:{},sessions:{}},{ttlMs=8*3600e3,maxFails=
   remove(name){name=String(name).trim().toLowerCase();const u=doc.users[name];if(!u)throw Error('USER_NOT_FOUND');
    if(u.role==='admin'&&Object.values(doc.users).filter(x=>x.role==='admin').length<=1)throw Error('LAST_ADMIN');
    delete doc.users[name];for(const [k,v] of Object.entries(doc.sessions))if(v.name===name)delete doc.sessions[k]},
+  _revoke(name,keepTok){for(const [k,v] of Object.entries(doc.sessions))if(v.name===name&&k!==keepTok)delete doc.sessions[k]},
+  // Cambio de clave propio: exige la clave actual; cierra las demás sesiones de la persona y conserva la actual.
+  changeOwnPassword(token,current,next){
+   const who=this.check(token);if(!who)throw Error('LOGIN_REQUIRED');const u=doc.users[who.name];
+   if(String(next||'').length<12)throw Error('PASSWORD_TOO_SHORT');
+   if(!timingSafeEqual(Buffer.from(hash(String(current),u.salt),'hex'),Buffer.from(u.hash,'hex')))throw Error('WRONG_PASSWORD');
+   u.salt=randomBytes(16).toString('hex');u.hash=hash(next,u.salt);u.fails=0;this._revoke(who.name,tok(token));
+  },
+  // Administración: restablecer clave (revoca TODAS sus sesiones) y cambiar rol (revoca sus sesiones). Nunca borra la cuenta.
+  adminResetPassword(name,next){name=String(name).trim().toLowerCase();const u=doc.users[name];if(!u)throw Error('USER_NOT_FOUND');
+   if(String(next||'').length<12)throw Error('PASSWORD_TOO_SHORT');u.salt=randomBytes(16).toString('hex');u.hash=hash(next,u.salt);u.fails=0;u.lockedUntil=0;this._revoke(name)},
+  setRole(name,role){name=String(name).trim().toLowerCase();const u=doc.users[name];if(!u)throw Error('USER_NOT_FOUND');if(!ROLES[role])throw Error('ROLE_INVALID');
+   if(u.role==='admin'&&role!=='admin'&&Object.values(doc.users).filter(x=>x.role==='admin').length<=1)throw Error('LAST_ADMIN');
+   u.role=role;this._revoke(name)},
   logout(t){delete doc.sessions[tok(String(t||''))]}
  };
 }
