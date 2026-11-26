@@ -68,7 +68,7 @@ function startReceiver(s){
  const run=async()=>{try{if(Date.now()>stopAt)throw Error('LOCAL_SESSION_EXPIRED');const out=await receiver.tick();if(sent)await sent.tick();intakeStatus={enabled:true,running:true,state:out.busy?'busy':out.baseline?'waiting_for_changes':'baseline',lastRun:new Date().toISOString()};}catch(e){clearInterval(receiverTimer);receiverTimer=null;intakeStatus=failedStatus(e);console.error(alertLine(intakeStatus));}};
  run();receiverTimer=setInterval(run,intakeMinutes*60000);receiverTimer.unref();
 }
-const assets={'/':'index.html','/index.html':'index.html','/app.mjs':'app.mjs','/core.mjs':'core.mjs','/integration.mjs':'integration.mjs','/shipments.mjs':'shipments.mjs','/shipments-ui.mjs':'shipments-ui.mjs','/catalog.mjs':'catalog.mjs','/style.css':'style.css','/setup':'setup.html','/setup.mjs':'setup.mjs'};
+const assets={'/':'index.html','/index.html':'index.html','/app.mjs':'app.mjs','/core.mjs':'core.mjs','/integration.mjs':'integration.mjs','/shipments.mjs':'shipments.mjs','/shipments-ui.mjs':'shipments-ui.mjs','/admin-ui.mjs':'admin-ui.mjs','/catalog.mjs':'catalog.mjs','/style.css':'style.css','/setup':'setup.html','/setup.mjs':'setup.mjs'};
 const u0=x=>x.split('?')[0];
 const LOGIN_HTML='<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width"><title>Acceso</title><style>body{font:16px system-ui;max-width:320px;margin:20vh auto;padding:0 16px}input,button{width:100%;padding:10px;margin:6px 0;box-sizing:border-box}</style><h1>Expedient</h1><form id=f><input name=name placeholder=Usuario autocomplete=username required><input name=password type=password placeholder=Clave autocomplete=current-password required><button>Entrar</button><p id=m></p></form><script>f.onsubmit=async e=>{e.preventDefault();const r=await fetch("/api/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:f.name.value,password:f.password.value})});if(r.ok)location="/";else m.textContent=r.status===429?"Cuenta bloqueada unos minutos":"Usuario o clave incorrectos"}</script>';
 const server=http.createServer(async(req,res)=>{
@@ -81,6 +81,14 @@ const server=http.createServer(async(req,res)=>{
  if(authLocal&&req.method==='GET'&&u0(req.url)==='/login'){res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'"});return res.end(LOGIN_HTML);}
  if(authLocal&&req.method==='GET'&&!req.url.startsWith('/api/')&&!users.check(uidOf(req))){res.writeHead(302,{location:'/login'});return res.end();}
  if(authLocal&&req.url.startsWith('/api/')){const who=users.check(uidOf(req));if(!who)return json(res,401,{error:'LOGIN_REQUIRED'});if(req.method!=='GET'&&!can(who.role,'write'))return json(res,403,{error:'ROLE_CANNOT_WRITE'});}
+ if(authLocal&&u0(req.url)==='/api/users'){
+  const who=users.check(uidOf(req));if(!who||who.role!=='admin')return json(res,403,{error:'ADMIN_REQUIRED'});
+  if(req.method==='GET')return json(res,200,{users:users.list()});
+  if(req.method!=='POST'&&req.method!=='DELETE')return json(res,405,{error:'Method not allowed'});
+  if(req.headers.origin!==origin)return json(res,403,{error:'Origin not allowed'});
+  let b='';for await(const c of req){b+=c;if(b.length>4000)return json(res,413,{error:'BODY_TOO_LARGE'});}let i;try{i=JSON.parse(b)}catch{return json(res,400,{error:'INVALID_JSON'})}
+  try{if(req.method==='POST')users.add(i.name,i.password,i.role);else users.remove(i.name);saveUsers();return json(res,200,{users:users.list()});}catch(e){return json(res,400,{error:String(e.message).replace(/[^A-Z_]/g,'')||'INVALID'});}
+ }
  if(req.method!=='GET'&&!(req.method==='POST'&&['/api/claude/analyze','/api/workspace','/api/events/synthetic','/api/setup','/api/shipments/propose'].includes(req.url)))return json(res,405,{error:'No send or tenant write endpoint.'});
  const u=new URL(req.url,origin),s=session(req);
  if(u.pathname==='/api/status'){const ss=s||makeSession(res);ss.csrf||=token();return json(res,200,{graphConfigured:enabled,authenticated:!!s?.account,mock,mode:mock?'simulation-no-network':'read-only-development',permissions:scopes,clientType:env.secret?'confidential':'public',send:false,write:false,csrf:ss.csrf,workspace:true,receiver:{...intakeStatus,intervalMinutes:intakeMinutes},claude:mock?{ready:true,model:'simulation'}:claude.status,aiProposer:{ready:aiProposer.ready||aiProposer.simulated,simulated:aiProposer.simulated,auto:aiProposer.auto,maxPerDay:aiProposer.maxPerDay},sentFolder:!!sentFolder});}
