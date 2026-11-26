@@ -5,8 +5,8 @@
 //   alta de envío (escritura por registro) 10% · espacio compartido 8%: lectura 20%, edición de expediente 20%, aviso nuevo 15%, edición de aviso 15%, borrador nuevo 15% (todos por registro: 409 solo si dos sesiones tocan el mismo registro) y escritura del historial (documento común, 409 de revisión) 15%.
 // El generador y el servidor comparten la máquina: los números incluyen esa competencia. No es una prueba de capacidad certificada.
 import {Worker,isMainThread,workerData,parentPort} from 'node:worker_threads';
-import {spawn,spawnSync,execFileSync} from 'node:child_process';import {mkdtempSync,statSync,existsSync} from 'node:fs';import {tmpdir} from 'node:os';import {join,resolve,dirname} from 'node:path';import {fileURLToPath} from 'node:url';
-const arg=(k,d)=>{const i=process.argv.indexOf('--'+k);return i>0?Number(process.argv[i+1]):d};
+import {spawn,spawnSync,execFileSync} from 'node:child_process';import {mkdtempSync,statSync,existsSync,mkdirSync} from 'node:fs';import {tmpdir} from 'node:os';import {join,resolve,dirname} from 'node:path';import {fileURLToPath} from 'node:url';
+const sarg=(k,d='')=>{const i=process.argv.indexOf('--'+k);return i>0?process.argv[i+1]:d};const flag=k=>process.argv.includes('--'+k);const arg=(k,d)=>{const i=process.argv.indexOf('--'+k);return i>0?Number(process.argv[i+1]):d};
 const ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 if(!isMainThread){
  const {base,user,pass,seconds,writeRatio,seed}=workerData;
@@ -42,17 +42,19 @@ if(!isMainThread){
 }else{
  const sessions=arg('sessions',30),shipments=arg('shipments',100),mails=arg('mails',5),seconds=arg('seconds',30),writeRatio=arg('write',0.1);
  const {blank}=await import(ROOT+'/web/core.mjs');const sh=await import(ROOT+'/web/shipments.mjs');
- const dir=mkdtempSync(join(tmpdir(),'lh-')),db=join(dir,'w.db'),users=join(dir,'users.json');
+ const dirArg=sarg('dir'),reuse=flag('reuse'),prepare=flag('prepare'),from=arg('from',1),to=arg('to',shipments);if(dirArg)mkdirSync(dirArg,{recursive:true});
+ const dir=dirArg||mkdtempSync(join(tmpdir(),'lh-')),db=join(dir,'w.db'),users=join(dir,'users.json');
  const state=blank();state.shipments=sh.blankShipments();state.shipments.ownDomains=['empresa.example'];
  const tpl=[['in','c1.example','Carga','Confirmamos carga.'],['in','p1.example','RE: Carga','Camión 1234 BCD'],['out','empresa.example','DUA','DUA presentado'],['in','aviso.example','Rechazo','Rechazada error'],['in','p1.example','Entrega','Entregado en destino, gracias.']];
  const t0=performance.now();
- for(let id=1;id<=shipments;id++){const n=String(id).padStart(6,'0'),dua='26ES'+String(id).padStart(10,'0');
+ for(let id=reuse?1:from;id<=(reuse?0:to);id++){const n=String(id).padStart(6,'0'),dua='26ES'+String(id).padStart(10,'0');
   sh.addShipment(state,{id:'TR-'+n,exp:`EXP-2601-${id}`,dua,bultos:(id%40)+1,kg:100+id%900});
   for(let k=0;k<mails;k++){const [dir,dom,sub,body]=tpl[k%tpl.length];sh.ingestMail(state,{id:`m${id}-${k}`,threadId:'th'+id,from:(dir==='out'?'ops@':'x@')+dom,subject:`${sub} TR-${n}`,date:new Date(Date.UTC(2026,0,1,8,0)+(id*mails+k)*60000).toISOString(),body:`${body} ${dua} ${'texto de relleno de un correo habitual. '.repeat(3)}`});}}
  const preloadS=(performance.now()-t0)/1000;
- {const {openShipmentsDb}=await import(ROOT+'/server/shipments-db.mjs');const sdb=openShipmentsDb(db,{ownDomains:['empresa.example']});sdb.importLegacy(state.shipments);sdb.close();}
- {const {openStore}=await import(ROOT+'/server/store.mjs');const ws=await openStore(db);const cur=ws.read();cur.state.cases=Array.from({length:arg('cases',300)},(_,i)=>({id:'C-'+i,title:'Expediente sintético '+i,n:0,audit:[]}));cur.state.notices=Array.from({length:arg('avisos',600)},(_,i)=>({id:'N-'+i,caseId:'C-'+(i%300),text:'aviso',read:false}));cur.state.drafts=Array.from({length:100},(_,i)=>({id:'D-'+i,caseId:'C-'+i,to:'x@ejemplo.test',subject:'borrador'}));await ws.write(cur.revision,cur.state);ws.close();}
- const stateMB=JSON.stringify(state.shipments).length/1e6;
+ {const {openShipmentsDb}=await import(ROOT+'/server/shipments-db.mjs');const sdb=openShipmentsDb(db,{ownDomains:['empresa.example']});if(!reuse)sdb.importLegacy(state.shipments,{append:true});sdb.close();}
+ if(!reuse&&from<=1){const {openStore}=await import(ROOT+'/server/store.mjs');const ws=await openStore(db);const cur=ws.read();cur.state.cases=Array.from({length:arg('cases',300)},(_,i)=>({id:'C-'+i,title:'Expediente sintético '+i,n:0,audit:[]}));cur.state.notices=Array.from({length:arg('avisos',600)},(_,i)=>({id:'N-'+i,caseId:'C-'+(i%300),text:'aviso',read:false}));cur.state.drafts=Array.from({length:100},(_,i)=>({id:'D-'+i,caseId:'C-'+i,to:'x@ejemplo.test',subject:'borrador'}));await ws.write(cur.revision,cur.state);ws.close();}
+ if(prepare){console.log(JSON.stringify({preparado:{dir,desde:from,hasta:to,mailsPorEnvio:mails,segundos:+((performance.now()-t0)/1000).toFixed(1)}}));process.exit(0)}
+ const stateMB=reuse?statSync(db).size/1e6:JSON.stringify(state.shipments).length/1e6;
  const pw='una-clave-larga-1';
  spawnSync(process.execPath,[ROOT+'/scripts/adduser.mjs','carga','operador'],{env:{...process.env,APP_USERS_PATH:users,ADDUSER_PASSWORD:pw}});
  const PORT=5600+Math.floor(Math.random()*300);
@@ -74,4 +76,4 @@ if(!isMainThread){
  const out={sessions,shipments,mailsPerShipment:mails,seconds,datosEnviosMB:+stateMB.toFixed(2),preloadS:+preloadS.toFixed(1),peticionesPorS:+(total/wall).toFixed(1),ops,codigos:codes,MBleidos:+(bin/1e6).toFixed(0),
   servidor:{rssMaxMB:+Math.max(0,...samples).toFixed(0),cpuMediaPct:c0&&c1?+((cpuSec(c1[1])-cpuSec(c0[1]))/wall*100).toFixed(0):null},bdMB:+dbSize.toFixed(1),errores:fatal,stderrServidor:serr.includes('Error')?serr.slice(0,300):''};
  console.log(JSON.stringify(out));srv.kill();
-  }
+}
