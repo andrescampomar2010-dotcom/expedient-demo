@@ -50,3 +50,8 @@ test('alta de un envío con la referencia de uno ya entregado: se rechaza (no de
  db.ingest({id:'e1',threadId:'t',from:'x@a.example',subject:'Entrega TR-0500',date:'2026-01-01T10:00:00Z',body:'Entregado en destino, gracias.'});
  assert.equal(db.get('TR-0500').shipment.status,'Entregado');assert.throws(()=>db.createShipment({id:'TR-0500'}),/SHIPMENT_EXISTS/);db.close();
 });
+test('regresión de escala: la lista paginada sin filtro usa índice (sin ordenar toda la tabla)',async()=>{
+ const {DatabaseSync}=await import('node:sqlite');const p=join(d,'plan.db');const db=openShipmentsDb(p,{ownDomains:['empresa.example']});db.createShipment({id:'TR-1'});db.close();
+ const raw=new DatabaseSync(p);const plan=raw.prepare('EXPLAIN QUERY PLAN SELECT id,ver,rej,sum,json FROM ship ORDER BY rej DESC,id ASC LIMIT 51').all().map(r=>r.detail).join(' | ');raw.close();
+ assert.ok(!/TEMP B-TREE/i.test(plan),plan);assert.match(plan,/ship_order/);
+});
