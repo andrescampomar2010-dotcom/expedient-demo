@@ -1,0 +1,14 @@
+[Unit]
+Description=Expedient
+After=network.target
+[Service]
+User=expedient
+WorkingDirectory=/opt/expedient
+EnvironmentFile=/etc/expedient.env
+ExecStart=/usr/bin/node server/server.mjs
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/expedient
+[Install]
+WantedBy=multi-user.target
