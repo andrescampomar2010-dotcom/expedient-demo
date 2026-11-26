@@ -33,7 +33,7 @@ const num = s => Number(String(s).replace(/\./g, '').replace(',', '.'));
 const domainOf = a => String(a || '').toLowerCase().split('@').pop().trim();
 const ts = d => Date.parse(d) || 0;
 
-export const ATT_LABEL = { leido: 'leído', sin_texto: 'sin texto: no leído, posible escaneo', demasiado_grande: 'demasiado grande: no leído', no_soportado: 'contenido no leído', protegido: 'PDF con clave: no leído', protegido: 'PDF con clave: no leído', error: 'no se pudo leer' };
+export const ATT_LABEL = { leido: 'leído', sin_texto: 'sin texto: no leído, posible escaneo', demasiado_grande: 'demasiado grande: no leído', no_soportado: 'contenido no leído', protegido: 'PDF con clave: no leído', protegido: 'PDF con clave: no leído', error: 'no se pudo leer', leido_ocr: 'leído por OCR, NO verificado: confirma con el original', ocr_no_disponible: 'escaneo: OCR no disponible, no leído' };
 export function extract(mail) {
   const text = `${mail.subject || ''}\n${mail.body || ''}\n${(mail.attachments || []).join(' ')}\n${String(mail.attachmentText || '').slice(0, 60000)}`;
   const duas = [...new Set((text.match(/\b\d{2}[A-Za-z]{2}\d{10,16}[A-Za-z]?\b/g) || []).map(x => x.toUpperCase()))];
@@ -118,7 +118,7 @@ function makeEvent(mail, x, shipment) {
     id: 'ev-' + mail.id, date: mail.date, side, kind, rejection: kind === 'rechazo',
     text: side === 'info' && kind === 'info' ? mail.subject : label,
     mailId: mail.id,
-    source: `Correo ${fmt(mail.date)} de ${mail.from}: «${mail.subject}»` + (mail.attachmentsInfo?.length ? ' · Adjuntos: ' + mail.attachmentsInfo.map(a => `${a.name} (${ATT_LABEL[a.status] || a.status})`).join(', ') : '')
+    source: `Correo ${fmt(mail.date)} de ${mail.from}: «${mail.subject}»` + (mail.attachmentsInfo?.length ? ' · Adjuntos: ' + mail.attachmentsInfo.map(a => `${a.name} (${ATT_LABEL[a.status] || a.status}${a.ocr && Object.values(a.ocr.hints || {}).some(v => v.length) ? ' · pista OCR sin verificar: ' + Object.values(a.ocr.hints).flat().join(', ') : ''})`).join(', ') : '')
   };
 }
 
