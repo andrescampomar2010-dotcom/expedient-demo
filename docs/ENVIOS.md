@@ -27,3 +27,9 @@ Código en `web/shipments.mjs`, probado en `tests/shipments.test.mjs`. La IA no 
 - El receptor de desarrollo consulta como mínimo cada 60 minutos.
 - No lee el texto de adjuntos escaneados (sin OCR). Los nombres de adjuntos sí se buscan.
 - Probado con correos ficticios y simulaciones de Graph. No probado con una cuenta real de Outlook.
+
+
+## Enviados y propuesta de IA (opcional)
+
+- `MAIL_SENT_FOLDER_ID` (carpeta Elementos enviados) y `OWN_MAIL_DOMAINS` (vuestros dominios): los correos salientes alimentan las fichas como "gestión". Cursor propio, solo lectura.
+- `AI_PROPOSER_ENABLED=true` activa la propuesta para correos en Pendientes. Las reglas siguen decidiendo lo exacto (DUA, expediente, referencia, conversación). La IA solo sugiere entre envíos abiertos, se muestra "sin verificar" y se aplica únicamente si pulsas "Aceptar sugerencia". En simulación sale un stub etiquetado SIMULACIÓN.
