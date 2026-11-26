@@ -41,7 +41,7 @@ ${tag(s.status)}${m.rejectionOpen ? tag('Rechazo sin gestión posterior', 'warn'
 
   function mailBlock(m, mark) {
     const ev = (S.ensure(st()).items.find(s => s.id === m.shipmentId)?.events || []).find(e => e.mailId === m.id);
-    return `<div class="line ${mark ? 'hit' : ''}"><small>${esc(S.fmt(m.date))} · ${esc(m.from)} · ${m.direction === 'out' ? 'enviado por nosotros' : 'recibido'}</small><br><strong>${esc(m.subject)}</strong><p>${esc(m.body)}</p>${(m.attachments || []).map(a => tag('Adjunto: ' + a)).join('')}${ev?.corrects ? tag('Corrige un dato anterior (' + ev.corrects + ')', 'warn') : ''}${m.how ? `<p><small>${esc(m.how)}</small></p>` : ''}</div>`;
+    return `<div class="line ${mark ? 'hit' : ''}"><small>${esc(S.fmt(m.date))} · ${esc(m.from)} · ${m.direction === 'out' ? 'enviado por nosotros' : 'recibido'}</small><br><strong>${esc(m.subject)}</strong><p>${esc(m.body)}</p>${(m.attachments || []).map(a => { const i = (m.attachmentsInfo || []).find(x => x.name === a); return tag('Adjunto: ' + a + (i ? ' · ' + (S.ATT_LABEL[i.status] || i.status) : ''), i && i.status !== 'leido' && i.status !== 'no_soportado' ? 'warn' : undefined); }).join('')}${ev?.corrects ? tag('Corrige un dato anterior (' + ev.corrects + ')', 'warn') : ''}${m.how ? `<p><small>${esc(m.how)}</small></p>` : ''}</div>`;
   }
 
   function detail(id, hits = []) {
