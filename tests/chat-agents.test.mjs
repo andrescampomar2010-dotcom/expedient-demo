@@ -75,7 +75,7 @@ test('las respuestas de reglas citan fuentes navegables (correo/ficha) en accion
  const m=await chat.message('actor:Coordinador','resúmeme los correos de TR-0412',W);
  assert.ok(m.sources.some(s=>s.kind==='mail'&&s.id==='d4'),'fuente del correo de corrección de matrícula');
  assert.ok(m.sources.every(s=>s.shipmentId==='TR-0412'));
- assert.match(m.reply,/\[d4\]/,'el resumen referencia el ID navegable del correo');
+ assert.match(m.reply,/Lo importante:/);assert.match(m.reply,/Siguiente paso:/);assert.match(m.reply,/4321 ?KLM/,'síntesis de hechos y cambios, no volcado');assert.ok(!m.reply.includes('[d4]'),'las referencias van después, como fuentes');
 });
 
 test('autonomía real: política auto ejecuta sin confirmación; sin auto exige confirmación; revocada no ejecuta',async()=>{
@@ -151,7 +151,7 @@ test('ámbito histórico: expedientes cerrados y consultas sin referencia exacta
  const closed=await chat.message('a:Coordinador','acciones recomendadas de TR-0398',{canWrite:false});
  assert.match(closed.reply,/TR-0398/);assert.match(closed.reply,/está entregado/);
  const closedMails=await chat.message('a:Coordinador','correos de TR-0398',{canWrite:false});
- assert.match(closedMails.reply,/2 correos registrados de TR-0398/,'los correos de un envío entregado siguen indexados');
+ assert.match(closedMails.reply,/En el hilo de TR-0398 hay 2 correos/,'los correos de un envío entregado siguen indexados');
  assert.ok(closedMails.sources.some(s=>s.kind==='mail'&&s.id==='d7'),'fuente al correo del envío cerrado');
  // sin referencia exacta: el usuario no sabe el TR; busca por asunto de correo indexado
  const loose=await chat.message('a:Coordinador','DUA presentado',{canWrite:false});
