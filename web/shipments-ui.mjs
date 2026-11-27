@@ -1,6 +1,6 @@
 import * as S from './shipments.mjs';
 // Pantalla «Envíos»: ficha viva por envío, pendientes de relacionar, búsqueda y alta manual.
-export function shipmentsUI({ host, getState, save, esc, msg, demo, ai, remote }) {
+export function shipmentsUI({ host, getState, save, esc, msg, demo, ai, remote, team = () => [], taskOp = null }) {
   const cache = remote ? S.blankShipments() : null;
   const st = () => (remote ? { shipments: cache } : getState());
   let tok = 0, moreList = false;
@@ -46,6 +46,20 @@ ${tag(s.status)}${m.rejectionOpen ? tag('Rechazo sin gestión posterior', 'warn'
     return `<div class="line ${mark ? 'hit' : ''}" data-mail-id="${esc(m.id)}"><small>${esc(S.fmt(m.date))} · ${esc(m.from)} · ${m.direction === 'out' ? 'enviado por nosotros' : 'recibido'}</small><br><strong>${esc(m.subject)}</strong><p>${esc(m.body)}</p>${(m.attachments || []).map(a => { const i = (m.attachmentsInfo || []).find(x => x.name === a); return tag('Adjunto: ' + a + (i ? ' · ' + (S.ATT_LABEL[i.status] || i.status) : ''), i && i.status !== 'leido' && i.status !== 'no_soportado' ? 'warn' : undefined); }).join('')}${ev?.corrects ? tag('Corrige un dato anterior (' + ev.corrects + ')', 'warn') : ''}${m.how ? `<p><small>${esc(m.how)}</small></p>` : ''}</div>`;
   }
 
+  function assigneeRow(s) {
+    const people = team();
+    return `<section class="line"><small>Persona asignada:</small> <select id="ship-assignee" data-sh-id="${esc(s.id)}"><option value="">Sin asignar</option>${people.map(p => `<option value="${esc(p.name)}" ${s.assignee === p.name ? 'selected' : ''} ${p.absent ? 'disabled' : ''}>${esc(p.name)}${p.absent ? ' (ausente)' : ''}</option>`).join('')}</select>${s.assignee && people.find(p => p.name === s.assignee)?.absent ? ' <span class="tag warn">asignada a una persona ausente</span>' : ''}</section>`;
+  }
+  function taskBlock(s) {
+    const people = team();
+    const rows = (s.tasks || []).map(t => `<li>${t.done ? '✓ ' : ''}<strong>${t.dir === 'ext' ? 'externa' : 'interna'}</strong> · ${esc(t.txt)}${t.who ? ' · ' + esc(t.who) : ''}${t.due ? ' · vence ' + esc(t.due) + ' (' + esc(S.dueLabel(t.due)) + ')' : ''}${!t.done && taskOp ? ` <button data-sh="task-done" data-id="${esc(s.id)}" data-task="${esc(t.id)}">Hecha</button>` : ''}</li>`).join('');
+    const flags = S.riskFlags(s);
+    return `${flags.length ? '<div class="notice">' + flags.map(f => '⚠ ' + esc(f)).join('<br>') + '</div>' : ''}
+${assigneeRow(s)}
+<ul>${rows || '<li>Sin tareas registradas.</li>'}</ul>
+${taskOp ? `<details><summary>Nueva tarea</summary><p><input id="task-txt" maxlength="240" placeholder="Descripción de la tarea" size="40"> <select id="task-dir"><option value="int">interna</option><option value="ext">externa (espera a cliente/proveedor)</option></select> <select id="task-who"><option value="">Sin persona</option>${people.map(p => `<option value="${esc(p.name)}" ${p.absent ? 'disabled' : ''}>${esc(p.name)}</option>`).join('')}</select> <input type="date" id="task-due"> <button data-sh="task-add" data-id="${esc(s.id)}">Añadir</button></p><p><small>Vencimiento opcional y explícito: la app no inventa fechas límite.</small></p></details>` : ''}`;
+  }
+
   function detail(id, hits = []) {
     const s = sh(id); if (!s) return '<p>Envío no encontrado.</p>';
     const m = S.summarize(s);
@@ -53,6 +67,7 @@ ${tag(s.status)}${m.rejectionOpen ? tag('Rechazo sin gestión posterior', 'warn'
     return `<button data-sh="back">← Volver</button><section class="line"><h3>${esc(s.id)} · ${esc(s.route || '')}</h3><small>${esc(s.cargo || '')}</small><br>${tag('Cliente: ' + s.client)}${tag('Proveedor: ' + s.provider)}${tag(s.status)}</section>
 ${summary(s)}
 <h3>Matrículas</h3>${plates.length ? `<section class="line">${m.plateNow.map(p => `<p><strong>${esc(p.role)} ${esc(p.value)}</strong> <small>desde ${esc(S.fmt(p.date))}${p.replaces ? ', sustituye a ' + esc(p.replaces) : ''}</small></p>`).join('')}${plates.some(p => p.replaces) ? '<p><small>Hay una corrección: el historial conserva los valores anteriores.</small></p>' : ''}</section>` : '<div class="notice">Ningún correo de este envío trae matrículas todavía.</div>'}
+<h3>Tareas</h3>${taskBlock(s)}
 ${(s.conflicts || []).length ? `<h3>Datos que no coinciden con la ficha</h3>${s.conflicts.map(c => `<div class="notice">${esc(S.fmt(c.date))} · ${esc(c.text)}. No se ha cambiado la ficha: revisa cuál vale.</div>`).join('')}` : ''}
 <h3>Historial (${s.events.length})</h3>${s.events.slice().reverse().map(e => `<p><strong>${esc(S.fmt(e.date))}</strong> · ${e.side === 'gestion' ? tag('Gestión nuestra') : tag('Información')}${e.rejection ? tag('Rechazo', 'warn') : ''} ${esc(e.text)}<br><small>${esc(e.source)}</small></p>`).join('') || '<p>Sin historial.</p>'}
 <h3>Correos del envío (${s.mailIds.length})</h3>${s.mailIds.map(mailById).filter(Boolean).sort((a, b) => Date.parse(b.date) - Date.parse(a.date)).map(mm => mailBlock(mm, hits.includes(mm.id))).join('')}`;
@@ -102,16 +117,23 @@ ${a?.shipmentId ? `<button class="primary" data-sh="confirm" data-via="ai" data-
       else if (a === 'ask') { const x = S.ensure(st()), m = mailById(d.mail); msg('Consultando a la IA…'); const open = remote ? await remote.openHeads() : x.items.filter(i => i.status !== 'Entregado'); const r = await ai.ask({ subject: m.subject, body: m.body, from: m.from }, open); if (r.error) throw Error('IA: ' + r.error); const ok = remote ? (await remote.op({ op: 'proposal', mailId: d.mail, proposal: r })).attached : S.attachProposal(st(), d.mail, r); ok ? msg('Sugerencia recibida. Es solo una propuesta: tú decides.') : msg('La IA devolvió un envío no válido; se ignora.'); if (!remote) save(); }
       else if (a === 'confirm') { if (remote) await remote.op({ op: 'confirm', mailId: d.mail, shipmentId: d.id, via: d.via }); else { S.confirmPending(st(), d.mail, d.id, d.via); save(); } msg(`Correo añadido a ${d.id} con su fuente.`); }
       else if (a === 'discard') { if (remote) await remote.op({ op: 'discard', mailId: d.mail }); else { S.confirmPending(st(), d.mail, null); save(); } msg('Correo descartado.'); }
+      else if (a === 'task-done') { if (taskOp) { await taskOp('complete-task', { shipmentId: d.id, taskId: d.task }); msg('Tarea marcada como hecha.'); } }
+      else if (a === 'task-add') { if (taskOp) { const txt = host.querySelector('#task-txt')?.value || ''; const dir = host.querySelector('#task-dir')?.value || 'int'; const who = host.querySelector('#task-who')?.value || ''; const due = host.querySelector('#task-due')?.value || ''; await taskOp('add-task', { shipmentId: d.id, task: { txt, dir, who, due } }); msg('Tarea añadida.'); } }
       else if (a === 'create') { const v = k => host.querySelector('#ns-' + k)?.value.trim() || ''; const data = { id: v('id'), route: v('route'), client: v('client'), clientDomain: v('clientDomain'), provider: v('provider'), providerDomain: v('providerDomain'), exp: v('exp'), dua: v('dua'), bultos: v('bultos'), kg: v('kg') }; if (remote) await remote.op({ op: 'create', data }); else { S.addShipment(st(), data); save(); } sub = 'list'; msg('Envío creado.'); }
       await paint();
-    } catch (err) { msg({ SHIPMENT_ID_REQUIRED: 'Falta la referencia del envío.', SHIPMENT_EXISTS: 'Ya existe un envío con esa referencia.', NOT_PENDING: 'Ese correo ya se había resuelto.' }[err.message] || err.message); await paint(); }
+    } catch (err) { msg({ SHIPMENT_ID_REQUIRED: 'Falta la referencia del envío.', SHIPMENT_EXISTS: 'Ya existe un envío con esa referencia.', NOT_PENDING: 'Ese correo ya se había resuelto.', UNKNOWN_SHIPMENT: 'Envío no encontrado.', UNKNOWN_TASK: 'Esa tarea ya no existe.', INVALID_TASK: 'La tarea necesita una descripción (máx. 240).', INVALID_TASK_DIR: 'Tipo de tarea no válido.', INVALID_TASK_DUE: 'Fecha de vencimiento no válida.' }[err.message] || err.message); await paint(); }
   }
   function input(e) {
     if (e.target.id !== 'sh-q') return;
     q = e.target.value; if (!remote) { host.querySelector('#sh-results').innerHTML = results(); return; }
     clearTimeout(input.t); input.t = setTimeout(async () => { try { await remote.load({ sub: 'search', q }, cache); } catch (err) { msg('No se pudo buscar: ' + err.message); return; } const el = host.querySelector('#sh-results'); if (el && q === e.target.value) el.innerHTML = results(); }, 250);
   }
-  host.addEventListener('click', click); host.addEventListener('input', input);
+  async function change(e) {
+    if (e.target.id !== 'ship-assignee' || !taskOp) return;
+    try { await taskOp('assign-shipment', { shipmentId: e.target.dataset.shId, who: e.target.value }); msg(e.target.value ? 'Envío asignado a ' + e.target.value + '.' : 'Envío sin persona asignada.'); } catch (err) { msg(err.message); }
+    await paint();
+  }
+  host.addEventListener('click', click); host.addEventListener('input', input); host.addEventListener('change', change);
   paint();
-  return () => { host.removeEventListener('click', click); host.removeEventListener('input', input); };
+  return () => { host.removeEventListener('click', click); host.removeEventListener('input', input); host.removeEventListener('change', change); };
 }
