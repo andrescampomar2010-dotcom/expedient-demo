@@ -210,10 +210,14 @@ const server=http.createServer(async(req,res)=>{
     if(i.op==='confirm')return json(res,200,shipDb.confirm(String(i.mailId),String(i.shipmentId),i.via||''));
     if(i.op==='proposal')return json(res,200,{attached:shipDb.attachProposal(String(i.mailId),i.proposal)});
     if(i.op==='discard')return json(res,200,shipDb.confirm(String(i.mailId),null));
+    if(i.op==='add-task')return json(res,200,{task:shipDb.addTask(i.shipmentId,i.task||{})});
+    if(i.op==='complete-task')return json(res,200,{task:shipDb.completeTask(i.shipmentId,i.taskId)});
+    if(i.op==='assign-task')return json(res,200,{task:shipDb.assignTask(i.shipmentId,i.taskId,i.who)});
+    if(i.op==='assign-shipment')return json(res,200,{shipment:shipDb.assignShipment(i.shipmentId,i.who)});
     return json(res,400,{error:'UNKNOWN_OP'});
    }
    return json(res,405,{error:'Method not allowed'});
-  }catch(e){const m=String(e.message||'');return json(res,/^(NOT_PENDING|UNKNOWN_SHIPMENT|SHIPMENT_ID_REQUIRED|SHIPMENT_EXISTS)$/.test(m)?400:500,{error:/^[A-Z_]+$/.test(m)?m:'ERROR'});}
+  }catch(e){const m=String(e.message||'');return json(res,/^(NOT_PENDING|UNKNOWN_SHIPMENT|UNKNOWN_TASK|SHIPMENT_ID_REQUIRED|SHIPMENT_EXISTS|INVALID_TASK|INVALID_TASK_DIR|INVALID_TASK_DUE)$/.test(m)?400:500,{error:/^[A-Z_]+$/.test(m)?m:'ERROR'});}
  }
  if(u.pathname==='/api/workspace'){
   if(!s)return json(res,401,{error:'LOCAL_SESSION_REQUIRED'});
