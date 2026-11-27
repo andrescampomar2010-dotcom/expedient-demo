@@ -20,7 +20,7 @@ test('resumen general y acciones recomendadas con reglas, rotulado SIMULACIÓN y
  const a=await chat.message('actor:Coordinador','¿Cuáles son las acciones recomendadas para TR-0412?',W);
  assert.match(a.reply,/TR-0412/);assert.match(a.reply,/Te recomiendo/);assert.match(a.reply,/4321 ?KLM/);
  const m=await chat.message('actor:Coordinador','Dime los correos e hilos de TR-0412',W);
- assert.match(m.reply,/th-412|correos registrados de TR-0412/);assert.match(m.reply,/clientenorte\.example/);
+ assert.match(m.reply,/En el hilo de TR-0412/);assert.ok(m.sources.some(x=>x.kind==='mail'&&/clientenorte\.example/.test(x.label)),'el remitente va en la fuente, no volcado en el texto');
  const help=await chat.message('actor:Coordinador','hola',W);
  assert.match(help.reply,/asistente de reglas locales/);
 });
