@@ -80,3 +80,14 @@ test('demo: personas asignadas, tareas sembradas y pendientes por correo intacto
   S.assignShipment(st, 'TR-0421', 'Marta Vela');
   assert.equal(byId['TR-0421'].assignee, 'Marta Vela');
 });
+
+test('recuento por encima del tamaño de página: openTasksFromItems y aviso de alcance', () => {
+  const items = [];
+  for (let i = 1; i <= 60; i++) items.push({ id: 'TR-' + String(i).padStart(4, '0'), route: 'A → B', client: 'C', assignee: i % 2 ? 'Iker Sala' : 'Marta Vela', tasks: [{ id: 'T-' + i, txt: 'tarea ' + i, dir: 'int', who: i % 2 ? 'Iker Sala' : 'Marta Vela', due: '', ts: '', done: i === 60 ? 'x' : '', src: 'test' }] });
+  const open = S.openTasksFromItems(items);
+  assert.equal(open.length, 59); // 60 envíos (más que la página de 50), una tarea hecha
+  assert.equal(open.filter(o => o.task.who === 'Iker Sala').length, 30);
+  assert.equal(S.taskScopeNote(60, 73), 'Recuento sobre 60 envíos abiertos de 73 en total. Los entregados no se incluyen.');
+  assert.match(S.taskScopeNote(200, 500), /primeros 200/);
+  assert.match(S.taskScopeNote(60, 60), /los 60 envíos abiertos/);
+});
