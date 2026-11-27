@@ -6,6 +6,10 @@ Demo local de preparación, revisión y asignación de expedientes documentales.
 
 Instala dependencias con `npm ci`, ejecuta `npm run demo:simulated` y abre `http://localhost:4875`. Al arrancar se recibe un correo sintético y se prepara un expediente automáticamente: hilo, adjunto XLSX, conciliación, regla de asignación, candidatos oficiales, incidencias y pasos. Abre Automatización para probar repetición, composición desconocida, descuadres y falta de packing. Ver [preparación y fuentes](docs/PREPARATION.md). La primera revisión sigue siendo humana antes de cualquier entrega.
 
+## Chat con asistente integrado
+
+Pestaña «Chat» de la app servidor: pregunta por envíos, correos e histórico, pide acciones recomendadas, o que prepare un expediente (conserva los adjuntos ya leídos: nombres, estado y texto extraído; sin binarios) o un borrador (plantilla local, no IA). Cada persona elige el modelo de su chat entre los configurados (reglas locales siempre; adaptadores Anthropic, OpenAI compatible y Gemini verificados contra la documentación oficial el 27/11/2026). Con IA real, el modelo solo redacta sobre datos que recuperan las reglas. Sin clave, responde un asistente de reglas locales rotulado SIMULACIÓN. Envío autónomo de respuestas: apagado por defecto y solo tras cadena completa de autoridad (flags de administrador + cuenta autorizada + política por persona con dominios/propósito/tope, revocable + confirmación por envío + idempotencia + auditoría). Ver [docs/CHAT.md](docs/CHAT.md). No probado con APIs reales ni cuenta real.
+
 ## Envíos y ficha viva
 
 Pantalla «Envíos»: cada correo se suma a la ficha de su envío, con resumen de última gestión y última información, rechazos cruzados por DUA y correcciones sin perder historial. Ver [docs/ENVIOS.md](docs/ENVIOS.md) y [qué falta para producción](docs/PRODUCCION.md).
@@ -52,14 +56,15 @@ Este HTML extra no necesita API, cuenta, servidor ni conexión de red. Los datos
 - Servidor Microsoft Graph de desarrollo, desactivado por defecto: OAuth con state y PKCE, sesiones en memoria, lectura de diez resúmenes de correo y veinte entradas raíz de OneDrive. Sin escritura o envío.
 
 - Receptor automático Microsoft delta, con cursor, dedupe, actualización de hilo y parada segura. Apagado por defecto, sin prueba de tenant real. Ver [configuración exacta y limitaciones](docs/RECEIVER.md).
+- Chat con asistente integrado y modelo elegible por persona, acciones con confirmación y envío autónomo bajo política administrativa, todo auditado. Ver [docs/CHAT.md](docs/CHAT.md).
 
 ## No implementado / no validado
 
 - Motores específicos de proveedores, OCR/PDF, reglas de un despacho real, validación TARIC actual, importación en sistemas aduaneros y presentación de declaraciones. Sí se integra un subconjunto real del parser XLSX de un preparador público existente y se genera un XLSX genérico revisado.
-- Autenticación multiusuario y permisos de producción, correo enviado o avisos externos. Sí hay espacio compartido entre sesiones locales, persistido en disco.
+- Autenticación multiusuario y permisos de producción, correo enviado o avisos externos. Sí hay espacio compartido entre sesiones locales, persistido en disco. El chat puede enviar respuestas solo con la cadena de autoridad de docs/CHAT.md; por defecto nunca envía.
 - Indexación masiva/semántica y sincronización general de documentos. El correo tiene receptor delta opcional de una carpeta, apagado y solo probado con simulaciones, ver docs/RECEIVER.md. Sí se importa manualmente TXT pequeño de OneDrive con fuente y fecha; hay recuperación literal de hasta tres fuentes para una consulta revisada a Claude.
 - MCP. Se ha elegido una API Graph de lectura para el adaptador, no se ofrece un servidor MCP.
-- Validación con credencial Claude real o cuenta Microsoft real. Adaptadores escritos y probados solo con transportes ficticios. Activarlos requiere aprobación independiente de datos y gasto.
+- Validación con credencial Claude real o cuenta Microsoft real. Adaptadores escritos y probados solo con transportes ficticios. Activarlos requiere aprobación independiente de datos y gasto. Igual para los adaptadores del chat (Anthropic, OpenAI compatible, Gemini): probados solo con transportes ficticios, sin llamadas reales en tests.
 - Autenticación Graph con cuenta real. Las rutas están escritas pero solo se han probado en modo desactivado.
 
 ## Desarrollo
