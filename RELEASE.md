@@ -34,6 +34,6 @@ Lote adicional del chat: el modelo de IA real investiga con herramientas que eje
 
 - Conservación de binarios conectada a Graph: `server/attachment-source.mjs` descarga el adjunto original bajo demanda con la sesión Graph de la persona que confirma el expediente (autorización `Mail.Read` ya concedida; nunca otra cuenta), validación de identificadores, coincidencia exacta de nombre y tope antes y después de descargar (2 MB efectivos por el límite de 3 MB del transporte `graph()`). Lo no conservado queda destacado como SIN BINARIO DISPONIBLE. Probado con transportes Graph ficticios (descarga real y cada fallo); sin cuenta real.
 - Fuentes al correo exacto: la fuente de un correo abre la ficha del envío y resalta ese correo dentro de ella; si ya no está indexado, la interfaz lo declara.
-- Respuestas del chat en lenguaje natural: la contestación primero y las fuentes después, en botones separados bajo el mensaje.
+- Respuestas del chat en lenguaje natural: la contestación primero y las fuentes después, en botones separados bajo el mensaje. El resumen de hilos es síntesis de hechos, cambios y siguiente paso (no volcado de correos); el modelo real recibe la misma instrucción.
 - Ámbito histórico verificado y declarado: búsqueda en abiertos y cerrados, correos ingeridos indexados, consulta sin referencia exacta; límites declarados (la ruta no se indexa, el contenido binario no se busca, el histórico es el de correos ingeridos).
 - 141 pruebas (138 pasan, 3 omitidas de base, 0 fallos).
