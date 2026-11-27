@@ -1,3 +1,17 @@
+# Revisión 0.7.0, 27 noviembre 2026
+
+Mismo proyecto Expedient. `npm ci`, `npm run demo:simulated`, localhost:4875. Suite 147 pruebas, 144 superadas, 3 omitidas, 0 fallos.
+
+La v0.7 añade dos piezas:
+
+- Barra de personas ficticias (nombre, rol, carga abierta, ausencia) en Expedientes, Tareas, Envíos y Avisos; la coordinadora lo ve todo, el resto filtra lo suyo. Filtro ficticio, no autenticación.
+- Asignación por persona: expedientes (con bloqueo a personas ausentes, también en servidor) y envíos.
+- Tareas internas/externas por envío con vencimiento explícito, etiquetas («vencida Xd», «HOY», «mañana», «en Xd»), pantalla «Tareas» agrupada por persona con completado y reasignación.
+- Avisos: inactividad (4+ días sin movimiento) y ETA explícita a 7 días o menos sin borrador registrado. Sin ETA no hay aviso.
+- Los correos por clasificar siguen aparte en Envíos → Pendientes; no son tareas.
+
+Límites declarados en docs/EQUIPO.md: no hay tabla de agentes configurable, la disposición de la barra es sencilla y la reasignación por ausencia es manual. En modo servidor, los recuentos usan los envíos cargados en pantalla. Sin cuentas reales, sin coste, sin envíos: como siempre.
+
 # Revisión 0.4.0, 23 noviembre 2026
 
 Mismo proyecto Expedient; esquema de almacenamiento 0.1.0 conservado. `npm ci`, `npm run demo:simulated`, localhost:4875. Las revisiones locales estables 0.2.0 y 0.3.0 se han conservado fuera del paquete.
