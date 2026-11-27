@@ -32,3 +32,18 @@ test('tareas y asignación persisten en el almacén por registro', () => {
   assert.throws(() => db2.completeTask('TR-9001', 'T-x'), /UNKNOWN_TASK/);
   db2.close();
 });
+
+test('las cabeceras de /list traen tareas: el recuento no depende de la página de 50', () => {
+  const db = openShipmentsDb(join(d, 'p.db'));
+  for (let i = 1; i <= 60; i++) {
+    db.createShipment({ id: 'TR-P' + String(i).padStart(3, '0'), route: 'A → B', client: 'Cliente X', provider: 'Proveedor Y', created: '2026-11-20T08:00:00+01:00' });
+    db.addTask('TR-P' + String(i).padStart(3, '0'), { txt: 'tarea ' + i, dir: 'int', who: 'Iker Sala' });
+  }
+  const page = db.list({ limit: 50 });
+  assert.equal(page.items.length, 50); // la página visible es de 50
+  assert.ok(page.next);
+  const heads = db.list({ limit: 200, onlyOpen: true }).items; // lo que consulta openHeads() para la barra/Tareas
+  assert.equal(heads.length, 60);
+  assert.equal(S.openTasksFromItems(heads).length, 60); // recuento completo por encima de la página
+  db.close();
+});
