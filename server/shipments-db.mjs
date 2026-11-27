@@ -81,6 +81,10 @@ export function openShipmentsDb(path,{ownDomains=[]}={}){
   createShipment(d){return run({pendingAll:true,shipIds:[String(d?.id||'').trim()].filter(Boolean)},(st)=>S.addShipment(st,d))},
   confirm(mailId,shipmentId,via=''){return run({pendingAll:true,shipIds:shipmentId?[shipmentId]:[],mailIds:[mailId]},(st)=>S.confirmPending(st,mailId,shipmentId,via))},
   attachProposal(mailId,prop){return run({pendingAll:true},(st)=>S.attachProposal(st,mailId,prop))},
+  addTask(id,t){return run({shipIds:[String(id||'')]},(st)=>S.addTask(st,String(id||''),t))},
+  completeTask(id,tid){return run({shipIds:[String(id||'')]},(st)=>S.completeTask(st,String(id||''),String(tid||'')))},
+  assignTask(id,tid,who){return run({shipIds:[String(id||'')]},(st)=>S.assignTask(st,String(id||''),String(tid||''),String(who||'')))},
+  assignShipment(id,who){return run({shipIds:[String(id||'')]},(st)=>S.assignShipment(st,String(id||''),String(who||'')))},
   // ---- lecturas acotadas ----
   list({limit=50,after='',onlyOpen=false,onlyRejections=false}={}){
    limit=Math.min(Math.max(1,Number(limit)||50),200);const [ar,ai]=after?after.split('|'):['',''];
