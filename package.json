@@ -1,11 +1,11 @@
 {
   "name": "expedient-local-demo",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node --env-file-if-exists=.env server/server.mjs",
-    "ocr:check":"node scripts/ocr-setup.mjs",
+    "ocr:check": "node scripts/ocr-setup.mjs",
     "test": "node --test tests/*.test.mjs",
     "build:html": "node build.mjs",
     "demo": "node --env-file-if-exists=.env server/server.mjs",
