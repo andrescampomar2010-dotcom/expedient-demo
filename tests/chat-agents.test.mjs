@@ -71,7 +71,7 @@ test('las respuestas de reglas citan fuentes navegables (correo/ficha) en accion
  const {chat}=await fixture();
  const a=await chat.message('actor:Coordinador','acciones recomendadas de TR-0412',W);
  assert.ok(a.sources.length>=1);assert.ok(a.sources.every(s=>s.id&&s.kind));
- assert.match(a.reply,/Fuentes:/);
+ assert.match(a.reply,/Debajo tienes las fuentes/);
  const m=await chat.message('actor:Coordinador','resúmeme los correos de TR-0412',W);
  assert.ok(m.sources.some(s=>s.kind==='mail'&&s.id==='d4'),'fuente del correo de corrección de matrícula');
  assert.ok(m.sources.every(s=>s.shipmentId==='TR-0412'));
@@ -141,4 +141,22 @@ test('tope de almacenamiento de binarios: archivo grande no se conserva y se des
  assert.ok(c.documents.every(x=>x.type!=='adjunto-binario'),'nada por encima del tope se conserva');
  assert.ok(c.documents.some(x=>/límite de almacenamiento/.test(x.text)));
  assert.ok(!existsSync(join(d3,'adj'))||readdirSync(join(d3,'adj')).length===0,'nada escrito por encima del tope');
+});
+
+test('ámbito histórico: expedientes cerrados y consultas sin referencia exacta',async()=>{
+ const d=mkdtempSync(join(tmpdir(),'hist-'));
+ const store=await openStore(join(d,'w.json'));const st=blank();st.shipments=S.demoState().shipments;await store.write(0,st);
+ const chat=createChat({store,shipDb:null,chatPath:join(d,'chat.json'),env:{INTEGRATION_MOCK:'true'}});
+ // cerrado/entregado: TR-0398 está entregado y el asistente igualmente lo consulta (historial, no solo abiertos)
+ const closed=await chat.message('a:Coordinador','acciones recomendadas de TR-0398',{canWrite:false});
+ assert.match(closed.reply,/TR-0398/);assert.match(closed.reply,/está entregado/);
+ const closedMails=await chat.message('a:Coordinador','correos de TR-0398',{canWrite:false});
+ assert.match(closedMails.reply,/2 correos registrados de TR-0398/,'los correos de un envío entregado siguen indexados');
+ assert.ok(closedMails.sources.some(s=>s.kind==='mail'&&s.id==='d7'),'fuente al correo del envío cerrado');
+ // sin referencia exacta: el usuario no sabe el TR; busca por asunto de correo indexado
+ const loose=await chat.message('a:Coordinador','DUA presentado',{canWrite:false});
+ assert.match(loose.reply,/TR-0412/,'encuentra el envío por texto de correo (asunto DUA presentado) sin referencia exacta');
+ // límites declarados: la ruta (ciudades) no forma parte del índice de búsqueda del chat
+ const route=await chat.message('a:Coordinador','Bilbao Sevilla',{canWrite:false});
+ assert.ok(!/TR-0398/.test(route.reply),'la ruta no está indexada: Bilbao y Sevilla solo aparecen en la ruta de TR-0398 y no encuentran nada');
 });
