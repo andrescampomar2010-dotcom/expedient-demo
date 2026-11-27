@@ -10,6 +10,10 @@ Instala dependencias con `npm ci`, ejecuta `npm run demo:simulated` y abre `http
 
 Pestaña «Chat» de la app servidor: pregunta por envíos, correos e histórico, pide acciones recomendadas, o que prepare un expediente (conserva los adjuntos ya leídos: nombres, estado y texto extraído; sin binarios) o un borrador (plantilla local, no IA). Cada persona elige el modelo de su chat entre los configurados (reglas locales siempre; adaptadores Anthropic, OpenAI compatible y Gemini verificados contra la documentación oficial el 27/11/2026). Con IA real, el modelo solo redacta sobre datos que recuperan las reglas. Sin clave, responde un asistente de reglas locales rotulado SIMULACIÓN. Envío autónomo de respuestas: apagado por defecto y solo tras cadena completa de autoridad (flags de administrador + cuenta autorizada + política por persona con dominios/propósito/tope, revocable + confirmación por envío + idempotencia + auditoría). Ver [docs/CHAT.md](docs/CHAT.md). No probado con APIs reales ni cuenta real.
 
+## Equipo y tareas
+
+Barra de personas ficticias (rol, carga abierta y ausencia) que filtra la bandeja en cada pantalla, asignación de expedientes y envíos por persona, y tareas internas/externas por envío con vencimiento explícito y avisos de inactividad y de ETA sin borrador. Los límites se declaran en [docs/EQUIPO.md](docs/EQUIPO.md). Los correos por clasificar siguen aparte, en Envíos → Pendientes.
+
 ## Envíos y ficha viva
 
 Pantalla «Envíos»: cada correo se suma a la ficha de su envío, con resumen de última gestión y última información, rechazos cruzados por DUA y correcciones sin perder historial. Ver [docs/ENVIOS.md](docs/ENVIOS.md) y [qué falta para producción](docs/PRODUCCION.md).
@@ -36,7 +40,7 @@ Este HTML extra no necesita API, cuenta, servidor ni conexión de red. Los datos
 2. Pulsa «Proponer HS desde referencias locales». El ejemplo offline usa un candidato NC8 con referencia oficial, pendiente de revisión y NO suficiente para una declaración.
 3. Revisa la línea y marca su casilla.
 4. Confirma la revisión del expediente. Los totales y las líneas incompletas bloquean esta revisión.
-5. Elige Operador A o B y pulsa «Asignar y crear aviso local».
+5. Elige una persona del equipo ficticio y pulsa «Asignar y crear aviso local».
 6. Abre Avisos y borradores. En el HTML, el aviso solo existe en este navegador. En la app servidor, guarda el espacio y abre otra ventana para verlo como el responsable ficticio.
 7. Prepara un borrador y descárgalo como texto, sin enviarlo.
 8. Descarga el expediente JSON o las líneas CSV. Ambos son salidas genéricas NO declarables, no un formato validado para un programa aduanero.
