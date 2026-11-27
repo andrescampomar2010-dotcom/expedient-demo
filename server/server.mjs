@@ -9,6 +9,7 @@ import {openShipmentsDb} from './shipments-db.mjs';
 import {resolve,dirname} from 'node:path';
 import {claudeService,mockData} from './adapters.mjs';
 import {aiProposerService} from './ai-proposer.mjs';
+import {createChat} from './chat.mjs';
 import http from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {randomBytes,createHash,timingSafeEqual} from 'node:crypto';
@@ -43,13 +44,26 @@ const aiProposer=aiProposerService();
 const ownDomains=(process.env.OWN_MAIL_DOMAINS||'').toLowerCase().split(',').map(x=>x.trim()).filter(Boolean);
 const sentFolder=process.env.MAIL_SENT_FOLDER_ID||'';
 const env={tenant:process.env.MS_TENANT_ID,client:process.env.MS_CLIENT_ID,secret:process.env.MS_CLIENT_SECRET,redirect:process.env.MS_REDIRECT_URI||origin+'/auth/callback'};
-const scopes=['Mail.Read','Files.Read']; // Deliberately no write or send scopes.
+// Sin scopes de escritura salvo envío autónomo del chat: Mail.Send solo si el administrador lo activa (MAIL_SEND_ENABLED).
+const scopes=['Mail.Read','Files.Read',...(process.env.MAIL_SEND_ENABLED==='true'?['Mail.Send']:[])];
 const dataMode=mock?'simulation':enabled?'real':'local';
 const dataPath=resolve(process.env.APP_DATA_PATH||`data/${dataMode==='simulation'?'simulation':dataMode==='real'?'real':'local'}.json`);
 {const marker=dataPath+'.mode';let prev='';try{prev=readFileSync(marker,'utf8').trim();}catch{}
  if(prev&&prev!==dataMode)throw Error(`DATA_MODE_MISMATCH: ${dataPath} belongs to mode "${prev}". Use another APP_DATA_PATH so simulated, local and real data never mix.`);
  if(!prev){mkdirSync(dirname(dataPath),{recursive:true});writeFileSync(marker,dataMode);}}
 const store=await openStore(dataPath);
+// Chat con asistente: historial y permisos por persona en un documento aparte (ver server/chat.mjs).
+// Envío autónomo solo tras la cadena completa de autoridad; sendGraphMail exige sesión Graph autenticada.
+async function sendGraphMail(s,{to,subject,body}){
+ if(!s?.account)throw Error('SEND_TRANSPORT_UNAVAILABLE');
+ const msal=makeClient();msal.getTokenCache().deserialize(s.cache);
+ const auth=await msal.acquireTokenSilent({account:s.account,scopes});s.cache=msal.getTokenCache().serialize();
+ const r=await fetch('https://graph.microsoft.com/v1.0/me/sendMail',{method:'POST',redirect:'error',signal:AbortSignal.timeout(20000),headers:{Authorization:'Bearer '+auth.accessToken,'content-type':'application/json'},body:JSON.stringify({message:{subject:String(subject).slice(0,200),body:{contentType:'text',content:String(body).slice(0,20000)},toRecipients:[{emailAddress:{address:String(to).toLowerCase()}}]},saveToSentItems:true})});
+ if(!r.ok)throw Error('SEND_FAILED');
+}
+let chat;
+// La persona del chat se deriva en el servidor: usuario autenticado, o actor ficticio de la demo (no es autenticación).
+const personOf=(req,who)=>authLocal?'u:'+who.name:'actor:'+String(req.headers['x-actor']||'Coordinador').replace(/[^A-Za-z0-9 áéíóúñü-]/gi,'').slice(0,40)||'actor:Coordinador';
 // Envíos por registro (solo con SQLite). Migra una vez el estado completo antiguo (state.shipments) sin perder nada; la copia antigua queda en un fichero aparte.
 let shipDb=null;
 if(String(dataPath).endsWith('.db')&&process.env.APP_SHIPMENTS_STORE!=='document'){
@@ -60,6 +74,7 @@ if(String(dataPath).endsWith('.db')&&process.env.APP_SHIPMENTS_STORE!=='document
   if(r.imported||r.reason==='ya migrado'){const bk=dataPath+'.envios-anterior.json';if(!existsSync(bk))writeFileSync(bk,JSON.stringify(legacy),{mode:0o600});delete cur.state.shipments;await store.write(cur.revision,cur.state);console.log('Envíos migrados al almacén por registro:',JSON.stringify(r),'copia anterior en',bk);}}
 }
 if(mock&&process.env.DEMO_EVENT_ON_START==='true'){const current=store.read();const out=await processMail(current.state,await syntheticEvent('complete'));if(!out.duplicate)await store.write(current.revision,current.state);console.log('Synthetic mail event processed automatically on start; external providers disabled.');}
+chat=createChat({store,shipDb,chatPath:dataPath+'.chat.json',sendGraphMail});
 const sessions=new Map();const idleMs=30*60*1000;
 let MsalClient;
 const makeClient=()=>new MsalClient({auth:{clientId:env.client,authority:`https://login.microsoftonline.com/${env.tenant}`,...(env.secret?{clientSecret:env.secret}:{})}});
@@ -80,7 +95,7 @@ function startReceiver(s){
  const run=async()=>{try{if(Date.now()>stopAt)throw Error('LOCAL_SESSION_EXPIRED');const out=await receiver.tick();if(sent)await sent.tick();intakeStatus={enabled:true,running:true,state:out.busy?'busy':out.baseline?'waiting_for_changes':'baseline',lastRun:new Date().toISOString()};}catch(e){clearInterval(receiverTimer);receiverTimer=null;intakeStatus=failedStatus(e);console.error(alertLine(intakeStatus));}};
  run();receiverTimer=setInterval(run,intakeMinutes*60000);receiverTimer.unref();
 }
-const assets={'/':'index.html','/index.html':'index.html','/app.mjs':'app.mjs','/core.mjs':'core.mjs','/integration.mjs':'integration.mjs','/shipments.mjs':'shipments.mjs','/shipments-ui.mjs':'shipments-ui.mjs','/shipments-remote.mjs':'shipments-remote.mjs','/admin-ui.mjs':'admin-ui.mjs','/catalog.mjs':'catalog.mjs','/style.css':'style.css','/setup':'setup.html','/setup.mjs':'setup.mjs'};
+const assets={'/':'index.html','/index.html':'index.html','/app.mjs':'app.mjs','/core.mjs':'core.mjs','/integration.mjs':'integration.mjs','/shipments.mjs':'shipments.mjs','/shipments-ui.mjs':'shipments-ui.mjs','/shipments-remote.mjs':'shipments-remote.mjs','/admin-ui.mjs':'admin-ui.mjs','/catalog.mjs':'catalog.mjs','/chat-ui.mjs':'chat-ui.mjs','/style.css':'style.css','/setup':'setup.html','/setup.mjs':'setup.mjs'};
 const u0=x=>x.split('?')[0];
 const LOGIN_HTML='<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width"><title>Acceso</title><style>body{font:16px system-ui;max-width:320px;margin:20vh auto;padding:0 16px}input,button{width:100%;padding:10px;margin:6px 0;box-sizing:border-box}</style><h1>Expedient</h1><form id=f><input name=name placeholder=Usuario autocomplete=username required><input name=password type=password placeholder=Clave autocomplete=current-password required><button>Entrar</button><p id=m></p></form><script>f.onsubmit=async e=>{e.preventDefault();const r=await fetch("/api/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:f.name.value,password:f.password.value})});if(r.ok)location="/";else m.textContent=r.status===429?"Cuenta bloqueada unos minutos":"Usuario o clave incorrectos"}</script>';
 const server=http.createServer(async(req,res)=>{
@@ -92,7 +107,7 @@ const server=http.createServer(async(req,res)=>{
  if(req.method==='POST'&&req.url==='/api/logout'){users.logout(uidOf(req));saveUsers();res.setHeader('set-cookie','uid=; Max-Age=0; Path=/');return json(res,200,{ok:true});}
  if(authLocal&&req.method==='GET'&&u0(req.url)==='/login'){res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'"});return res.end(LOGIN_HTML);}
  if(authLocal&&req.method==='GET'&&!req.url.startsWith('/api/')&&!users.check(uidOf(req))){res.writeHead(302,{location:'/login'});return res.end();}
- if(authLocal&&req.url.startsWith('/api/')){const who=users.check(uidOf(req));if(!who)return json(res,401,{error:'LOGIN_REQUIRED'});if(req.method!=='GET'&&!can(who.role,'write'))return json(res,403,{error:'ROLE_CANNOT_WRITE'});}
+ if(authLocal&&req.url.startsWith('/api/')){const who=users.check(uidOf(req));if(!who)return json(res,401,{error:'LOGIN_REQUIRED'});const lectorChat=['/api/chat/message','/api/chat/model'].includes(u0(req.url));if(req.method!=='GET'&&!can(who.role,'write')&&!lectorChat)return json(res,403,{error:'ROLE_CANNOT_WRITE'});}
  if(authLocal&&req.method==='POST'&&req.url==='/api/me/password'){
   if(req.headers.origin!==origin)return json(res,403,{error:'Origin not allowed'});
   let b='';for await(const c of req){b+=c;if(b.length>4000)return json(res,413,{error:'BODY_TOO_LARGE'});}let i;try{i=JSON.parse(b)}catch{return json(res,400,{error:'INVALID_JSON'})}
@@ -106,9 +121,36 @@ const server=http.createServer(async(req,res)=>{
   let b='';for await(const c of req){b+=c;if(b.length>4000)return json(res,413,{error:'BODY_TOO_LARGE'});}let i;try{i=JSON.parse(b)}catch{return json(res,400,{error:'INVALID_JSON'})}
   try{if(req.method==='POST'&&i.action==='reset')users.adminResetPassword(i.name,i.password);else if(req.method==='POST'&&i.action==='role')users.setRole(i.name,i.role);else if(req.method==='POST')users.add(i.name,i.password,i.role);else users.remove(i.name);saveUsers();return json(res,200,{users:users.list()});}catch(e){return json(res,400,{error:String(e.message).replace(/[^A-Z_]/g,'')||'INVALID'});}
  }
- if(req.method!=='GET'&&!(req.method==='POST'&&['/api/claude/analyze','/api/workspace','/api/events/synthetic','/api/setup','/api/shipments/propose','/api/shipments/op'].includes(req.url)))return json(res,405,{error:'No send or tenant write endpoint.'});
+ if(req.method!=='GET'&&!(req.method==='POST'&&['/api/claude/analyze','/api/workspace','/api/events/synthetic','/api/setup','/api/shipments/propose','/api/shipments/op','/api/chat/message','/api/chat/model','/api/chat/confirm','/api/chat/policy'].includes(req.url)))return json(res,405,{error:'No send or tenant write endpoint.'});
  const u=new URL(req.url,origin),s=session(req);
- if(u.pathname==='/api/status'){const ss=s||makeSession(res);ss.csrf||=token();return json(res,200,{production,shipmentsApi:!!shipDb,graphConfigured:enabled,authenticated:!!s?.account,mock,mode:mock?'simulation-no-network':'read-only-development',permissions:scopes,clientType:env.secret?'confidential':'public',send:false,write:false,csrf:ss.csrf,workspace:true,receiver:{...intakeStatus,intervalMinutes:intakeMinutes},claude:mock?{ready:true,model:'simulation'}:claude.status,aiProposer:{ready:aiProposer.ready||aiProposer.simulated,simulated:aiProposer.simulated,auto:aiProposer.auto,maxPerDay:aiProposer.maxPerDay},sentFolder:!!sentFolder});}
+ if(u.pathname.startsWith('/api/chat/')){
+  const who=authLocal?users.check(uidOf(req)):null;
+  const role=who?.role||null;
+  const canWrite=!authLocal||can(role,'write');
+  const isAdmin=!authLocal||role==='admin';
+  const person=personOf(req,who);
+  if(u.pathname==='/api/chat/state'&&req.method==='GET')return json(res,200,{...chat.state(person),canWrite,isAdmin,auth:authLocal});
+  if(u.pathname==='/api/chat/audit'&&req.method==='GET'){if(!isAdmin)return json(res,403,{error:'ADMIN_REQUIRED'});return json(res,200,{audit:chat.auditTrail()});}
+  if(req.headers.origin!==origin||!s||!same(s.csrf,req.headers['x-csrf-token']))return json(res,403,{error:'LOCAL_CONFIRMATION_REQUIRED'});
+  const lim=u.pathname==='/api/chat/message'?10000:5000;
+  let b='';for await(const c of req){b+=c;if(b.length>lim)return json(res,413,{error:'BODY_TOO_LARGE'});}
+  let i;try{i=JSON.parse(b)}catch{return json(res,400,{error:'INVALID_JSON'});}
+  try{
+   if(u.pathname==='/api/chat/message'){const out=await chat.message(person,i.text,{canWrite});return json(res,200,{reply:out.reply,label:out.label,model:out.model,aiError:out.aiError,proposals:out.proposals.map(p=>({id:p.id,kind:p.kind,describe:p.describe}))});}
+   if(u.pathname==='/api/chat/model'){return json(res,200,await chat.setModel(person,String(i.model||'')));}
+   if(u.pathname==='/api/chat/confirm'){const out=await chat.confirm(person,String(i.proposalId||''),i.accept===true,{canWrite,session:s});return json(res,200,out);}
+   if(u.pathname==='/api/chat/policy'){
+    if(!isAdmin)return json(res,403,{error:'ADMIN_REQUIRED'});
+    const target=authLocal?'u:'+String(i.person||'').trim().toLowerCase():'actor:'+String(i.person||'').replace(/[^A-Za-z0-9 áéíóúñü-]/gi,'').slice(0,40);
+    if(authLocal&&!users.list().some(x=>target==='u:'+x.name))return json(res,400,{error:'UNKNOWN_USER'});
+    await chat.setPolicy(person,target,{allow:i.allow,purpose:i.purpose,perDay:i.perDay,revoked:i.revoked===true},who?.name||'demo');
+    return json(res,200,chat.state(target));
+   }
+   return json(res,404,{error:'Not found'});
+  }catch(e){const m=String(e.code||e.message||'');const map={ROLE_CANNOT_WRITE:403,PROPOSAL_NOT_FOUND:404,CHAT_DAILY_LIMIT:429,CHAT_LIMIT:429,AI_UNKNOWN_MODEL:400,INVALID_MESSAGE:400,POLICY_INCOMPLETE:400,SEND_DISABLED_BY_ADMIN:403,SEND_NO_POLICY:403,SEND_INVALID_RECIPIENT:400,SEND_DOMAIN_NOT_ALLOWED:403,SEND_DAILY_LIMIT:429,SEND_TRANSPORT_UNAVAILABLE:503,SEND_FAILED:502,CHAT_SOURCE_GONE:404};
+   return json(res,map[m]||500,{error:/^[A-Z_]+$/.test(m)?m:'ERROR'});}
+ }
+ if(u.pathname==='/api/status'){const ss=s||makeSession(res);ss.csrf||=token();return json(res,200,{production,shipmentsApi:!!shipDb,graphConfigured:enabled,authenticated:!!s?.account,mock,mode:mock?'simulation-no-network':'read-only-development',permissions:scopes,clientType:env.secret?'confidential':'public',send:false,write:false,csrf:ss.csrf,workspace:true,receiver:{...intakeStatus,intervalMinutes:intakeMinutes},claude:mock?{ready:true,model:'simulation'}:claude.status,aiProposer:{ready:aiProposer.ready||aiProposer.simulated,simulated:aiProposer.simulated,auto:aiProposer.auto,maxPerDay:aiProposer.maxPerDay},sentFolder:!!sentFolder,chat:{models:chat.catalog.map(m=>({ref:m.ref,label:m.label,provider:m.provider,simulated:m.simulated,ready:m.ready})),sendEnabled:chat.sendEnabled}});}
 
  if(u.pathname==='/api/setup'){
   if(req.method==='GET'){const cur=existsSync('.env')?parseEnv(readFileSync('.env','utf8')):{};return json(res,200,{envExists:existsSync('.env'),checks:validateConfig(cur),running:{graph:enabled,mock},note:'Los cambios se aplican al reiniciar el servidor.'});}
