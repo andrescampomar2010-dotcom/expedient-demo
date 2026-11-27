@@ -136,14 +136,14 @@ const server=http.createServer(async(req,res)=>{
   let b='';for await(const c of req){b+=c;if(b.length>lim)return json(res,413,{error:'BODY_TOO_LARGE'});}
   let i;try{i=JSON.parse(b)}catch{return json(res,400,{error:'INVALID_JSON'});}
   try{
-   if(u.pathname==='/api/chat/message'){const out=await chat.message(person,i.text,{canWrite});return json(res,200,{reply:out.reply,label:out.label,model:out.model,aiError:out.aiError,proposals:out.proposals.map(p=>({id:p.id,kind:p.kind,describe:p.describe}))});}
+   if(u.pathname==='/api/chat/message'){const out=await chat.message(person,i.text,{canWrite,session:s});return json(res,200,{reply:out.reply,label:out.label,model:out.model,aiError:out.aiError,proposals:out.proposals.map(p=>({id:p.id,kind:p.kind,describe:p.describe})),sources:out.sources||[]});}
    if(u.pathname==='/api/chat/model'){return json(res,200,await chat.setModel(person,String(i.model||'')));}
    if(u.pathname==='/api/chat/confirm'){const out=await chat.confirm(person,String(i.proposalId||''),i.accept===true,{canWrite,session:s});return json(res,200,out);}
    if(u.pathname==='/api/chat/policy'){
     if(!isAdmin)return json(res,403,{error:'ADMIN_REQUIRED'});
     const target=authLocal?'u:'+String(i.person||'').trim().toLowerCase():'actor:'+String(i.person||'').replace(/[^A-Za-z0-9 áéíóúñü-]/gi,'').slice(0,40);
     if(authLocal&&!users.list().some(x=>target==='u:'+x.name))return json(res,400,{error:'UNKNOWN_USER'});
-    await chat.setPolicy(person,target,{allow:i.allow,purpose:i.purpose,perDay:i.perDay,revoked:i.revoked===true},who?.name||'demo');
+    await chat.setPolicy(person,target,{allow:i.allow,purpose:i.purpose,perDay:i.perDay,auto:i.auto===true,revoked:i.revoked===true},who?.name||'demo');
     return json(res,200,chat.state(target));
    }
    return json(res,404,{error:'Not found'});
