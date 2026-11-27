@@ -7,7 +7,7 @@ Pestaña **Chat** de la app servidor. Un asistente responde sobre los datos de l
 - Responder «¿cómo van los envíos?» con el resumen de reglas (envíos, correos, pendientes, rechazos abiertos).
 - «Acciones recomendadas de TR-0412»: ficha del envío, última gestión/información, rechazos abiertos, matrículas y acciones sugeridas por reglas.
 - «Correos e hilos de TR-0412»: los correos registrados del envío con fecha, remitente y adjuntos.
-- «Prepárame un expediente de TR-0412»: propone crear un expediente en borrador desde el correo más reciente con adjuntos. **Qué conserva de los adjuntos: lo que el receptor ya descargó y leyó** — nombres, estado de lectura por adjunto y el texto extraído (tope del receptor, 8000 caracteres). **Los archivos binarios no se guardan en la app y el chat no descarga nada nuevo del buzón.** El expediente queda en borrador, sin revisión.
+- «Prepárame un expediente de TR-0412»: propone crear un expediente en borrador desde el correo más reciente con adjuntos. **Qué conserva de los adjuntos: lo que el receptor ya descargó y leyó** (nombres, estado de lectura por adjunto y el texto extraído, tope del receptor de 8000 caracteres) **y, si la conservación de binarios está activada y autorizada, los archivos originales** descargados por la ruta autorizada de Graph con la sesión de la persona que confirma (ver «Conservación de binarios de adjuntos»). Lo que no se pueda conservar queda destacado en su documento como SIN BINARIO DISPONIBLE. El expediente queda en borrador, sin revisión.
 - «Prepárame un borrador»: plantilla local de reglas en Avisos y borradores. **No es texto generado por IA** y no se envía.
 - «Envía una respuesta»: solo con la cadena de autoridad completa (ver abajo).
 
@@ -60,11 +60,15 @@ No es un chat libre contra el buzón: la RECUPERACIÓN y las ACCIONES las ejecut
 
 ## Fuentes navegables
 
-Las respuestas citan sus fuentes (correo con ID, ficha de envío) y la interfaz las muestra como botones que abren la búsqueda de Envíos con esa referencia.
+Las respuestas van en lenguaje natural primero y las fuentes después, como botones separados bajo el mensaje. Una fuente de correo abre la ficha del envío y resalta el correo exacto dentro de ella (la UI marca cada bloque de correo con `data-mail-id`); si el correo o el envío ya no están indexados, la interfaz lo dice en lugar de abrir otra cosa. Una fuente de ficha abre la ficha del envío.
 
 ## Conservación de binarios de adjuntos
 
-Desactivada por defecto (`CHAT_ATTACH_STORE=false`). Activada exige además una fuente autorizada configurada en el servidor; el chat nunca descarga nada nuevo del buzón. Topes duros: 5 MB por archivo, 40 MB y 200 archivos en total. Cada documento del expediente declara su estado: binario conservado (archivo, bytes, sha256), SIN BINARIO DISPONIBLE (la fuente no lo tiene), no conservado por límite, o conservación desactivada.
+Desactivada por defecto (`CHAT_ATTACH_STORE=false`). Activada exige además una fuente autorizada configurada en el servidor; el chat nunca descarga nada nuevo del buzón por su cuenta. La fuente implementada es `server/attachment-source.mjs`: descarga bajo demanda desde Microsoft Graph con **la sesión de la misma persona que confirma la propuesta** (la autorización `Mail.Read` ya concedida a la app; nunca otra cuenta), validando identificadores de correo y adjunto antes de construir cada ruta, con coincidencia exacta de nombre de archivo y tope de tamaño comprobado **antes** (metadatos) y **después** (bytes reales) de descargar. El transporte `graph()` del servidor limita la respuesta JSON a 3 MB, así que el tope efectivo por archivo es 2 MB, por debajo del tope de 5 MB del almacén. Solo se conservan adjuntos de tipo archivo (no inline ni adjuntos de elemento). Topes duros del almacén: 5 MB por archivo, 40 MB y 200 archivos en total. Cada documento del expediente declara su estado: binario conservado (archivo, bytes, sha256), SIN BINARIO DISPONIBLE (la fuente no lo tiene o falló la descarga), no conservado por límite, o conservación desactivada. Probado con transportes Graph ficticios en tests/attachment-source.test.mjs: descarga correcta y cada fallo (correo desconocido, nombre ausente, no archivo, Graph caído, id inválido, sobrepasar el tope antes y después); ninguna prueba toca una cuenta real.
+
+## Ámbito histórico de la búsqueda
+
+La búsqueda del chat cubre **abiertos y cerrados** por igual: un envío entregado (p. ej. TR-0398) se resume, lista sus correos y da acciones como cualquier otro, y todos los correos ingeridos por el receptor quedan indexados y consultables aunque el envío esté archivado. No hace falta la referencia exacta: el buscador encuentra envíos por texto de correo (asunto, cuerpo, remitente, nombres de adjunto, texto extraído) y por DUA, expediente, matrícula, cliente o proveedor. Límites declarados (no es una búsqueda universal): la **ruta** (ciudades de origen/destino) **no está indexada**; el contenido binario de los adjuntos no se busca, solo el texto que el receptor extrajo al ingerir; y el histórico es el de los correos ingeridos en la app, no todo el buzón.
 
 ## Límites y no validado
 
