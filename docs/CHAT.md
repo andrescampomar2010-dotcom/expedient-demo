@@ -48,15 +48,27 @@ Apagado por defecto. Para que un envío ocurra deben cumplirse TODAS:
 1. `MAIL_SEND_ENABLED=true` y `MAIL_SEND_APPROVED=true` (administrador del sistema, en `.env`).
 2. Cuenta configurada y autorizada: con Graph real, el scope `Mail.Send` solo se pide cuando (1) está activo; sin cuenta autenticada, el envío falla cerrado. En modo simulación, la salida es una bandeja simulada marcada SIMULACIÓN.
 3. Política por persona concedida por un `admin` (endpoint `/api/chat/policy`): dominios de destinatario permitidos, propósito declarado, tope diario (1–50). Revocable con efecto inmediato; concesiones y revocaciones quedan auditadas.
-4. Confirmación explícita del envío concreto en el chat.
+4. Confirmación: por defecto, confirmación explícita de cada envío en el chat. Si la política por persona lleva `auto:true` (lo concede el admin, revocable y auditado), el asistente ejecuta las respuestas que caen dentro del alcance concedido SIN confirmación individual: autonomía real, apagada por defecto, con la misma cadena de comprobaciones (dominio, tope diario, idempotencia) y cada ejecución auditada.
 5. Idempotencia: cada propuesta se ejecuta una sola vez; reintentos responden "ya resuelta" sin duplicar.
 6. Auditoría de cada intento (SENT/DENIED, persona, destinatario, asunto, motivo) consultable por admin en `/api/chat/audit`.
 
-Un botón de admin y una cuota no bastan: sin política por persona no hay ni propuesta de envío; un destinatario fuera de la lista se rechaza antes de proponer.
+Un botón de admin y una cuota no bastan: sin política por persona no hay ni propuesta de envío; un destinatario fuera de la lista se rechaza antes de proponer; con `auto` revocado o fuera de alcance no se ejecuta nada.
+
+## Cómo trabaja el modelo de IA real
+
+No es un chat libre contra el buzón: la RECUPERACIÓN y las ACCIONES las ejecutan siempre las reglas del servidor. El modelo (1) recibe la pregunta con el contexto ya recuperado (marcado como datos no confiables), (2) puede investigar más con 4 herramientas que ejecutan las reglas (`buscar_envios`, `detalle_envio`, `hilo_envio`, `correo`; protocolo JSON de una línea, máx. 3 rondas, cada ronda es una llamada real al proveedor) y (3) redacta la respuesta citando fuentes. Las acciones (expediente, borrador, envío) las proponen las reglas y las confirma la persona o la política `auto`. Verificado con transportes ficticios en tests/chat-agents.test.mjs: multiturno, pregunta libre, detalle de fuentes/histórico y selección de modelo aislada por persona. Ninguna prueba llama a una API real.
+
+## Fuentes navegables
+
+Las respuestas citan sus fuentes (correo con ID, ficha de envío) y la interfaz las muestra como botones que abren la búsqueda de Envíos con esa referencia.
+
+## Conservación de binarios de adjuntos
+
+Desactivada por defecto (`CHAT_ATTACH_STORE=false`). Activada exige además una fuente autorizada configurada en el servidor; el chat nunca descarga nada nuevo del buzón. Topes duros: 5 MB por archivo, 40 MB y 200 archivos en total. Cada documento del expediente declara su estado: binario conservado (archivo, bytes, sha256), SIN BINARIO DISPONIBLE (la fuente no lo tiene), no conservado por límite, o conservación desactivada.
 
 ## Límites y no validado
 
 - Topes: 100 mensajes/persona/día, 30 llamadas IA/persona/día, historial de 200 mensajes/persona, 50 personas.
 - Persistencia del chat: `APP_DATA_PATH + '.chat.json'` (documento aparte, escritura atómica).
-- Los adaptadores de IA están probados solo con transportes ficticios en tests; ninguna prueba llama a una API real. Graph sendMail está escrito pero no validado con cuenta real (igual que el receptor).
+- Los adaptadores de IA están probados solo con transportes ficticios en tests (incluido el bucle multiturno con herramientas); ninguna prueba llama a una API real. Graph sendMail está escrito pero no validado con cuenta real (igual que el receptor).
 - En la demo sin auth, el "actor" es un filtro ficticio compartido, no un control de acceso.
