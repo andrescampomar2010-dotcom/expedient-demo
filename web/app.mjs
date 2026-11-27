@@ -37,7 +37,11 @@ let teamScope={heads:null,total:0,at:0};
 function ensureTeamScope(){
  if(!remote)return;
  if(teamScope.heads&&Date.now()-teamScope.at<15000)return;
- remote.openHeads().then(heads=>{teamScope={heads,total:remote.stats?.shipments??heads.length,at:Date.now()};render();}).catch(()=>{teamScope.at=Date.now();});
+ (async()=>{try{
+  await remote.load({sub:'list'},{items:[],mails:[],pending:[]}); // refresca stats (total real) sin tocar la caché de la pantalla
+  const heads=await remote.openHeads();
+  teamScope={heads,total:remote.stats?.shipments??heads.length,at:Date.now()};render();
+ }catch{teamScope.at=Date.now();}})();
 }
 const scopeItems=()=>remote?(teamScope.heads||SH.ensure(state).items):SH.ensure(state).items;
 const scopedOpenTasks=()=>SH.openTasksFromItems(scopeItems());
