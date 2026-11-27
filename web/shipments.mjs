@@ -24,6 +24,7 @@ export function blankShipments() {
 }
 export function ensure(state) {
   if (!state.shipments || state.shipments.version !== SHIPMENTS_VERSION) state.shipments = blankShipments();
+  for (const sh of state.shipments.items) sh.tasks ||= [];
   return state.shipments;
 }
 
@@ -291,6 +292,62 @@ export function stats(state) {
 // ---- Datos ficticios para la demo ----
 const own = 'operaciones@empresa.example';
 export const DEMO_OWN_DOMAIN = 'empresa.example';
+// ---- Tareas por envío (pendientes internos/externos con vencimiento) ----
+// Una tarea: {id, txt, dir:'ext'|'int', who, due:'YYYY-MM-DD'|'', ts, done, src}. Las externas esperan respuesta de cliente/proveedor;
+// las internas son trabajo del equipo. Los correos por clasificar NO son tareas: siguen en Envíos → Pendientes.
+export function dueLabel(due, ref = new Date()) {
+  if (!due) return '';
+  const [y, m, d] = due.split('-').map(Number);
+  const n = Math.round((new Date(y, m - 1, d) - new Date(ref.getFullYear(), ref.getMonth(), ref.getDate())) / 86400000);
+  return n < 0 ? 'vencida ' + (-n) + 'd' : n === 0 ? 'HOY' : n === 1 ? 'mañana' : 'en ' + n + 'd';
+}
+function shipmentOf(state, shipmentId) { const sh = ensure(state).items.find(x => x.id === shipmentId); if (!sh) throw Error('UNKNOWN_SHIPMENT'); return sh; }
+export function addTask(state, shipmentId, { txt = '', dir = 'int', who = '', due = '', src = 'manual' } = {}) {
+  const sh = shipmentOf(state, shipmentId);
+  txt = String(txt).trim();
+  if (!txt || txt.length > 240) throw Error('INVALID_TASK');
+  if (!['ext', 'int'].includes(dir)) throw Error('INVALID_TASK_DIR');
+  if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) throw Error('INVALID_TASK_DUE');
+  const t = { id: 'T-' + Math.random().toString(36).slice(2, 8), txt, dir, who: String(who || ''), due: String(due || ''), ts: new Date().toISOString(), done: '', src: String(src || 'manual') };
+  sh.tasks.push(t); return t;
+}
+export function completeTask(state, shipmentId, taskId) {
+  const t = (shipmentOf(state, shipmentId).tasks || []).find(x => x.id === taskId);
+  if (!t) throw Error('UNKNOWN_TASK');
+  if (!t.done) t.done = new Date().toISOString();
+  return t;
+}
+export function assignTask(state, shipmentId, taskId, who) {
+  const t = (shipmentOf(state, shipmentId).tasks || []).find(x => x.id === taskId);
+  if (!t) throw Error('UNKNOWN_TASK');
+  t.who = String(who || ''); return t;
+}
+export function assignShipment(state, shipmentId, who) { const sh = shipmentOf(state, shipmentId); sh.assignee = String(who || ''); return sh; }
+export function openTasks(state) {
+  const out = [];
+  for (const sh of ensure(state).items) for (const t of sh.tasks || []) if (!t.done) out.push({ shipmentId: sh.id, route: sh.route, client: sh.client, assignee: sh.assignee || '', task: t });
+  return out;
+}
+export function staleDays(sh, ref = new Date()) {
+  const last = sh.events && sh.events.length ? sh.events[sh.events.length - 1].date : sh.created;
+  const t = new Date(last); return isNaN(t) ? 0 : Math.max(0, Math.floor((ref - t) / 86400000));
+}
+// Avisos: inactividad (>=4 días sin movimiento) y ETA próxima (<=7 días) sin borrador registrado.
+// La ETA solo se evalúa cuando el dato es explícito en la ficha (campo eta); nunca se inventa.
+export function riskFlags(sh, ref = new Date()) {
+  const f = [];
+  if (sh.status === 'Entregado') return f;
+  const sd = staleDays(sh, ref);
+  if (sd >= 4) f.push('Sin movimiento desde hace ' + sd + ' días');
+  if (sh.eta && /^\d{4}-\d{2}-\d{2}$/.test(sh.eta)) {
+    const [y, m, d] = sh.eta.split('-').map(Number);
+    const n = Math.round((new Date(y, m - 1, d) - new Date(ref.getFullYear(), ref.getMonth(), ref.getDate())) / 86400000);
+    const hasDraft = (sh.events || []).some(e => /borrador/i.test((e.kind || '') + ' ' + (e.text || '')));
+    if (n <= 7 && !hasDraft) f.push('ETA ' + (n < 0 ? 'vencida hace ' + (-n) + 'd' : n === 0 ? 'HOY' : 'en ' + n + 'd') + ' sin borrador registrado');
+  }
+  return f;
+}
+
 export function demoState() {
   const state = { shipments: blankShipments() };
   state.shipments.ownDomains = [DEMO_OWN_DOMAIN];
@@ -302,6 +359,27 @@ export function demoState() {
   ];
   for (const d of base) addShipment(state, { ...d, created: '2026-11-19T08:00:00+01:00' });
   DEMO_HISTORY.forEach(m => ingestMail(state, m));
+  // Personas asignadas y tareas ficticias con vencimientos explícitos (datos de la demo, nada deducido).
+  const seed = (id, who, eta, tasks) => {
+    const sh = state.shipments.items.find(x => x.id === id);
+    sh.assignee = who; if (eta) sh.eta = eta;
+    for (const [txt, dir, due, done] of tasks) sh.tasks.push({ id: 'T-' + id + '-' + (sh.tasks.length + 1), txt, dir, who, due, ts: '2026-11-26T18:00:00+01:00', done: done || '', src: 'demo' });
+  };
+  seed('TR-0412', 'Iker Sala', '2026-11-28', [
+    ['Confirmar a Cliente Norte la recepción de la matrícula corregida (camión 4321 KLM)', 'ext', '2026-11-27'],
+    ['Preparar borrador DUA con la matrícula corregida', 'int', '2026-11-28']
+  ]);
+  seed('TR-0415', 'Iker Sala', '2026-11-28', [
+    ['Confirmar a Fletes Demo Centro la recepción de las matrículas (camión 9876 PQR)', 'ext', '2026-11-26'],
+    ['Revisar el rechazo de la declaración 26ES0000123456 (código de partida)', 'int', '2026-11-27']
+  ]);
+  seed('TR-0421', 'Lucía Prats', '2026-12-02', [
+    ['Preparar borrador DUA', 'int', '2026-11-30'],
+    ['Confirmar ventana de entrega con Importaciones Modelo', 'ext', '']
+  ]);
+  seed('TR-0398', 'Marta Vela', '', [
+    ['Confirmación de entrega enviada a Importaciones Modelo', 'ext', '2026-11-21', '2026-11-21T15:00:00+01:00']
+  ]);
   return state;
 }
 const DEMO_HISTORY = [
