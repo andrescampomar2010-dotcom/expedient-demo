@@ -10,6 +10,7 @@ import {resolve,dirname} from 'node:path';
 import {claudeService,mockData} from './adapters.mjs';
 import {aiProposerService} from './ai-proposer.mjs';
 import {createChat} from './chat.mjs';
+import {fetchGraphAttachment} from './attachment-source.mjs';
 import http from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {randomBytes,createHash,timingSafeEqual} from 'node:crypto';
@@ -74,7 +75,13 @@ if(String(dataPath).endsWith('.db')&&process.env.APP_SHIPMENTS_STORE!=='document
   if(r.imported||r.reason==='ya migrado'){const bk=dataPath+'.envios-anterior.json';if(!existsSync(bk))writeFileSync(bk,JSON.stringify(legacy),{mode:0o600});delete cur.state.shipments;await store.write(cur.revision,cur.state);console.log('Envíos migrados al almacén por registro:',JSON.stringify(r),'copia anterior en',bk);}}
 }
 if(mock&&process.env.DEMO_EVENT_ON_START==='true'){const current=store.read();const out=await processMail(current.state,await syntheticEvent('complete'));if(!out.duplicate)await store.write(current.revision,current.state);console.log('Synthetic mail event processed automatically on start; external providers disabled.');}
-chat=createChat({store,shipDb,chatPath:dataPath+'.chat.json',sendGraphMail});
+// Fuente autorizada de binarios para el chat: Graph con la sesión del usuario que confirma (ver server/attachment-source.mjs).
+const chatAttachmentSource=(mailId,name,session)=>{
+ if(!enabled||!session?.account)return null; // sin cuenta autorizada no hay fuente: se declara SIN BINARIO
+ const mail=chat?.mailById(mailId); if(!mail) return null;
+ return fetchGraphAttachment({findMail:id=>chat.mailById(id),mailId,name,get:p=>graph(session,p)});
+};
+chat=createChat({store,shipDb,chatPath:dataPath+'.chat.json',sendGraphMail,attachmentSource:chatAttachmentSource});
 const sessions=new Map();const idleMs=30*60*1000;
 let MsalClient;
 const makeClient=()=>new MsalClient({auth:{clientId:env.client,authority:`https://login.microsoftonline.com/${env.tenant}`,...(env.secret?{clientSecret:env.secret}:{})}});
