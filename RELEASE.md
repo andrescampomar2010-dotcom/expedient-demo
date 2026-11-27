@@ -21,3 +21,7 @@ El núcleo local es demostrable, con datos ficticios, pantallas, pruebas y conec
 - Decidir licencia global antes de publicar código abierto. La licencia MIT del subconjunto reutilizado y su atribución se conservan.
 
 No se necesita abrir estas líneas para demostrar el núcleo ni se da ninguna por terminada por tener un conector.
+
+# Revisión 0.5.0, 27 noviembre 2026
+
+Chat con asistente integrado (pestaña Chat de la app servidor): preguntas sobre envíos, correos e histórico con respuestas de reglas o redactadas por un modelo de IA configurado y elegido por cada persona (adaptadores Anthropic, OpenAI compatible y Gemini, verificados contra la documentación oficial; reglas locales siempre disponibles y rotuladas SIMULACIÓN). Acciones propuestas y confirmadas en el chat: preparar expediente conservando los adjuntos ya leídos (nombres, estado y texto extraído, sin binarios) y preparar borradores de plantilla (no IA, no enviados). Envío autónomo de respuestas apagado por defecto: exige flags de administrador, cuenta autorizada (scope Mail.Send solo entonces), política por persona con dominios/propósito/tope diario revocable, confirmación por envío, idempotencia y auditoría. Historial y propuestas aislados por persona derivada de la sesión; el texto de correos nunca concede permisos. 18 pruebas nuevas (129 en total), todas con transportes ficticios: ninguna llama a una API real. Ver docs/CHAT.md.
