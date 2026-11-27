@@ -17,4 +17,4 @@ Dos piezas de la demo:
 
 ## Persistencia
 
-Las personas viven en el espacio de trabajo (localStorage en el HTML; documento del espacio en el servidor). Las tareas viajan dentro de la ficha de cada envío, incluido el almacén por registro SQLite (`add-task`, `complete-task`, `assign-task`, `assign-shipment` en `/api/shipments/op`, con CSRF y origen como el resto). En modo servidor, los recuentos de la barra y la vista Tareas usan los envíos cargados en pantalla.
+Las personas viven en el espacio de trabajo (localStorage en el HTML; documento del espacio en el servidor). Las tareas viajan dentro de la ficha de cada envío, incluido el almacén por registro SQLite (`add-task`, `complete-task`, `assign-task`, `assign-shipment` en `/api/shipments/op`, con CSRF y origen como el resto). En modo servidor, los recuentos de la barra y la vista Tareas consultan TODOS los envíos abiertos (tope 200), no solo la página cargada, y la propia vista indica el alcance («Recuento sobre N envíos abiertos de M en total…») cuando hay paginación o tope. Los avisos de envíos (inactividad, ETA) se calculan sobre las fichas abiertas en pantalla y la vista lo indica.
