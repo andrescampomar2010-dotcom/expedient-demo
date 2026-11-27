@@ -136,7 +136,7 @@ const RE = {
 
 // Resumen por correo con su identificador navegable (fuentes), no un volcado sin referencias.
 function summarizeMails(mails, n = 6) {
-  return (mails || []).slice(0, n).map(m => `· [${m.id}] ${S.fmt(m.date)} — ${m.from}: ${m.subject} ${m.attachments?.length ? '[adjuntos: ' + m.attachments.join(', ') + ']' : ''} — ${String(m.body || '').slice(0, 120)}`).join('\n');
+  return (mails || []).slice(0, n).map(m => `· [${m.id}] ${S.fmt(m.date)}, ${m.from}: «${m.subject}»${m.attachments?.length ? ' (adjuntos: ' + m.attachments.join(', ') + ')' : ''}. ${String(m.body || '').slice(0, 120)}`).join('\n');
 }
 
 function mailSources(mails, n = 6) {
@@ -159,13 +159,17 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
     return view.pending().filter(p => p.mail && (p.mail.shipmentId === shipmentId || (p.candidates || []).includes(shipmentId))).length;
   }
 
+  // Respuesta en lenguaje natural: primero la contestación, las fuentes van aparte (botones debajo).
   function shipmentBlock(id) {
     const g = view.get(id);
     if (!g) return null;
     const pending = pendingForShipment(id);
     const actions = recommendedActions(g.shipment, g.summary, pending);
-    const lines = [fmtShipment(g.shipment, g.summary), 'Acciones recomendadas:', ...actions.map((x, i) => `- ${x.t} [fuente ${i + 1}]`), 'Fuentes:', ...actions.map((x, i) => `${i + 1}. ${x.src.label}`)];
-    return { text: lines.join('\n'), shipment: g.shipment, summary: g.summary, mails: g.mails, sources: actions.map(x => x.src) };
+    const s = g.shipment, sum = g.summary;
+    const plates = sum.plateNow.map(x => `${x.role} ${x.value || x.plate || ''}`.trim()).join(' / ') || 'sin matrículas vigentes';
+    const head = `${s.id} está ${String(s.status || '').toLowerCase()}: ${s.client || '?'} → ${s.provider || '?'}, ruta ${s.route || 'sin ruta'}${s.dua ? ', DUA ' + s.dua : ''}${s.exp ? ', expediente ' + s.exp : ''}. Matrículas actuales: ${plates}.`;
+    const body = actions.length ? 'Te recomiendo:\n' + actions.map((x, i) => `${i + 1}. ${x.t} (fuente ${i + 1})`).join('\n') : 'No veo ninguna acción pendiente en este envío.';
+    return { text: head + '\n\n' + body + '\n\nDebajo tienes las fuentes de cada recomendación, listas para abrir.', shipment: s, summary: sum, mails: g.mails, sources: actions.map(x => x.src) };
   }
 
   function addProposal(personKey, kind, payload, describe) {
@@ -178,7 +182,8 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
   }
 
   // ---- ejecutores (solo tras confirmación explícita) ----
-  async function execPrepareCase(p) {
+  async function execPrepareCase(p, session) {
+    p.session = session || null;
     const mail = p.payload.mailId ? findMail(p.payload.mailId) : null;
     const ship = p.payload.shipmentId ? view.get(p.payload.shipmentId)?.shipment : null;
     if (!mail && !ship) throw Error('CHAT_SOURCE_GONE');
@@ -203,7 +208,7 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
           continue;
         }
         try {
-          const got = await attachmentSource(mail.id, info.name);
+          const got = await attachmentSource(mail.id, info.name, p.session || null);
           const bytes = got?.bytes?.length || 0;
           if (!bytes) { c.documents.push({ name: info.name, text: `Adjunto del correo ${mail.id}. ${lectura} SIN BINARIO DISPONIBLE: la fuente autorizada no lo tiene (no descargado, borrado o modo simulación).`, type: 'adjunto-correo' }); missingBin++; continue; }
           if (bytes > ATTACH.maxFile || (doc0.attachBytes || 0) + bytes > ATTACH.maxTotal || (doc0.attachFiles || 0) >= ATTACH.maxFiles) {
@@ -339,18 +344,18 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
       sources = b?.sources || [];
     } else if (RE.mails.test(nt) && targets.length) {
       const g = view.get(targets[0]);
-      answer = g ? `Correos de ${targets[0]} (${g.mails.length}), resumidos; cada fuente es navegable:\n` + (summarizeMails(g.mails) || 'Sin correos registrados.') : 'No encuentro ese envío.';
+      answer = g ? (g.mails.length ? `Tengo ${g.mails.length} correos registrados de ${targets[0]}. Te los resumo; debajo tienes cada fuente para abrirla:\n` + summarizeMails(g.mails) : `${targets[0]} no tiene correos registrados todavía.`) : 'No encuentro ese envío.';
       sources = g ? mailSources(g.mails) : [];
     } else if (RE.overview.test(nt)) {
       const st = view.stats();
       const pend = view.pending().length;
-      answer = `Resumen (reglas locales): ${st.shipments} envíos, ${st.mails} correos registrados, ${pend} correos pendientes de clasificar, ${st.openRejections} rechazos abiertos. Pregunta por una referencia (p. ej. TR-0412) para el detalle.`;
+      answer = `Ahora mismo hay ${st.shipments} envíos registrados, ${st.mails} correos leídos, ${pend} correos pendientes de clasificar y ${st.openRejections} rechazos abiertos. Pregúntame por una referencia, por ejemplo TR-0412, y te doy el detalle.`;
     } else if (targets.length) {
       const b = shipmentBlock(targets[0]);
       answer = b ? b.text : 'No encuentro ese envío.';
       sources = b?.sources || [];
     } else {
-      answer = 'Asistente de reglas locales. Puedo: resumir envíos y correos ("¿cómo van los envíos?"), dar acciones recomendadas de un envío ("acciones recomendadas de TR-0412"), preparar un expediente o un borrador ("prepárame un expediente de TR-0412") y, si un administrador lo autoriza, enviar una respuesta. Las acciones siempre se confirman antes de ejecutarse.';
+      answer = 'Soy el asistente de reglas locales de la app. Puedo contarte cómo van los envíos, resumirte los correos de uno, recomendarte qué hacer con él, prepararte un expediente o un borrador y, si un administrador lo autoriza, enviar una respuesta. Las acciones siempre se confirman antes de ejecutarse.';
     }
     return { answer, proposals, targets, sources, autoExec };
   }
@@ -525,5 +530,6 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
     },
     auditTrail() { return chat.read().audit.slice(-100); },
     read: () => chat.read(),
+    mailById: (id) => findMail(id),
   };
 }
