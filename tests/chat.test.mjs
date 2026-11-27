@@ -18,11 +18,11 @@ test('resumen general y acciones recomendadas con reglas, rotulado SIMULACIÓN y
  const r=await chat.message('actor:Coordinador','¿Cómo van los envíos?',W);
  assert.match(r.reply,/4 envíos/);assert.match(r.label,/SIMULACIÓN/);assert.equal(r.model,'reglas');
  const a=await chat.message('actor:Coordinador','¿Cuáles son las acciones recomendadas para TR-0412?',W);
- assert.match(a.reply,/TR-0412/);assert.match(a.reply,/Acciones recomendadas/);assert.match(a.reply,/4321 ?KLM/);
+ assert.match(a.reply,/TR-0412/);assert.match(a.reply,/Te recomiendo/);assert.match(a.reply,/4321 ?KLM/);
  const m=await chat.message('actor:Coordinador','Dime los correos e hilos de TR-0412',W);
- assert.match(m.reply,/th-412|Correos de TR-0412/);assert.match(m.reply,/clientenorte\.example/);
+ assert.match(m.reply,/th-412|correos registrados de TR-0412/);assert.match(m.reply,/clientenorte\.example/);
  const help=await chat.message('actor:Coordinador','hola',W);
- assert.match(help.reply,/Asistente de reglas locales/);
+ assert.match(help.reply,/asistente de reglas locales/);
 });
 
 test('preparar expediente conserva adjuntos leídos (nombre, estado y texto), nunca binarios, y queda en borrador',async()=>{
