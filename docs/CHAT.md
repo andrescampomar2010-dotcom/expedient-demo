@@ -6,7 +6,7 @@ Pestaña **Chat** de la app servidor. Un asistente responde sobre los datos de l
 
 - Responder «¿cómo van los envíos?» con el resumen de reglas (envíos, correos, pendientes, rechazos abiertos).
 - «Acciones recomendadas de TR-0412»: ficha del envío, última gestión/información, rechazos abiertos, matrículas y acciones sugeridas por reglas.
-- «Correos e hilos de TR-0412»: los correos registrados del envío con fecha, remitente y adjuntos.
+- «Correos e hilos de TR-0412»: síntesis en lenguaje natural del hilo (hechos, cambios y siguiente paso, a partir de los eventos ya extraídos de los correos); cada correo queda referenciado después como fuente abrible. El modelo de IA real recibe la misma instrucción de síntesis (no volcado de registros).
 - «Prepárame un expediente de TR-0412»: propone crear un expediente en borrador desde el correo más reciente con adjuntos. **Qué conserva de los adjuntos: lo que el receptor ya descargó y leyó** (nombres, estado de lectura por adjunto y el texto extraído, tope del receptor de 8000 caracteres) **y, si la conservación de binarios está activada y autorizada, los archivos originales** descargados por la ruta autorizada de Graph con la sesión de la persona que confirma (ver «Conservación de binarios de adjuntos»). Lo que no se pueda conservar queda destacado en su documento como SIN BINARIO DISPONIBLE. El expediente queda en borrador, sin revisión.
 - «Prepárame un borrador»: plantilla local de reglas en Avisos y borradores. **No es texto generado por IA** y no se envía.
 - «Envía una respuesta»: solo con la cadena de autoridad completa (ver abajo).
