@@ -15,7 +15,7 @@
 //   sus respuestas y borradores son plantillas, nunca se presentan como generados por IA.
 import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import * as C from '../web/core.mjs';
 import * as S from '../web/shipments.mjs';
 import { llmService } from './llm.mjs';
@@ -101,15 +101,17 @@ function fmtShipment(s, summary) {
     `${s.dua ? ' · DUA ' + s.dua : ''}${s.exp ? ' · ' + s.exp : ''} · ${p}`;
 }
 
+// Cada acción recomendada cita su fuente navegable: el correo (mailId) o evento que la motiva.
 function recommendedActions(s, summary, pendingMails) {
   const a = [];
-  if (summary.rejectionOpen) a.push(`Rechazo ABIERTO (${S.fmt(summary.rejection.date)}): ${String(summary.rejection.text || summary.rejection.subject || '').slice(0, 200)}. Revisar el motivo, corregir el dato indicado y registrar la subsanación. Hasta cerrarse, el envío queda marcado.`);
-  if (s.status === 'Entregado') a.push('Consta entregado: archivar la documentación y cerrar el expediente si no quedan incidencias.');
-  if (!s.dua && s.status !== 'Entregado') a.push('Sin DUA registrado: confirmar si la declaración está presentada y añadirlo.');
-  if (!summary.plateNow.length && s.status !== 'Entregado') a.push('Sin matrícula de camión vigente: pedir matrículas al transportista antes de la carga.');
-  if (pendingMails) a.push(`Hay ${pendingMails} correo(s) pendientes de clasificar: confirmarlos o descartarlos en la pantalla Envíos.`);
-  if (summary.lastInfo && summary.lastGestion && Date.parse(summary.lastInfo.date) > Date.parse(summary.lastGestion.date)) a.push(`La última información (${S.fmt(summary.lastInfo.date)}) es posterior a la última gestión: revisar si pide respuesta.`);
-  if (!a.length) a.push('Las reglas no detectan incidencias abiertas. Revisar la última gestión y el último correo por si falta respuesta.');
+  const mailSrc = (ev) => ev?.mailId ? { kind: 'mail', id: ev.mailId, shipmentId: s.id, label: 'correo del ' + S.fmt(ev.date) } : { kind: 'shipment', id: s.id, label: 'ficha de ' + s.id };
+  if (summary.rejectionOpen) a.push({ t: `Rechazo ABIERTO (${S.fmt(summary.rejection.date)}): ${String(summary.rejection.text || summary.rejection.subject || '').slice(0, 200)}. Revisar el motivo, corregir el dato indicado y registrar la subsanación. Hasta cerrarse, el envío queda marcado.`, src: mailSrc(summary.rejection) });
+  if (s.status === 'Entregado') a.push({ t: 'Consta entregado: archivar la documentación y cerrar el expediente si no quedan incidencias.', src: { kind: 'shipment', id: s.id, label: 'ficha de ' + s.id } });
+  if (!s.dua && s.status !== 'Entregado') a.push({ t: 'Sin DUA registrado: confirmar si la declaración está presentada y añadirlo.', src: { kind: 'shipment', id: s.id, label: 'ficha de ' + s.id } });
+  if (!summary.plateNow.length && s.status !== 'Entregado') a.push({ t: 'Sin matrícula de camión vigente: pedir matrículas al transportista antes de la carga.', src: { kind: 'shipment', id: s.id, label: 'ficha de ' + s.id } });
+  if (pendingMails) a.push({ t: `Hay ${pendingMails} correo(s) pendientes de clasificar: confirmarlos o descartarlos en la pantalla Envíos.`, src: { kind: 'shipment', id: s.id, label: 'pendientes de ' + s.id } });
+  if (summary.lastInfo && summary.lastGestion && Date.parse(summary.lastInfo.date) > Date.parse(summary.lastGestion.date)) a.push({ t: `La última información (${S.fmt(summary.lastInfo.date)}) es posterior a la última gestión: revisar si pide respuesta.`, src: mailSrc(summary.lastInfo) });
+  if (!a.length) a.push({ t: 'Las reglas no detectan incidencias abiertas. Revisar la última gestión y el último correo por si falta respuesta.', src: { kind: 'shipment', id: s.id, label: 'ficha de ' + s.id } });
   return a;
 }
 
@@ -132,15 +134,25 @@ const RE = {
   overview: /resumen|historico|todos?\s+los\s+envios|como\s+van?\s+los\s+envios|vision\s+general/,
 };
 
+// Resumen por correo con su identificador navegable (fuentes), no un volcado sin referencias.
 function summarizeMails(mails, n = 6) {
-  return (mails || []).slice(0, n).map(m => `· ${S.fmt(m.date)} — ${m.from}: ${m.subject} ${m.attachments?.length ? '[adjuntos: ' + m.attachments.join(', ') + ']' : ''} — ${String(m.body || '').slice(0, 160)}`).join('\n');
+  return (mails || []).slice(0, n).map(m => `· [${m.id}] ${S.fmt(m.date)} — ${m.from}: ${m.subject} ${m.attachments?.length ? '[adjuntos: ' + m.attachments.join(', ') + ']' : ''} — ${String(m.body || '').slice(0, 120)}`).join('\n');
 }
 
-export function createChat({ store, shipDb = null, chatPath, env = process.env, llm = llmService(env), sendGraphMail = null, now = () => Date.now() }) {
+function mailSources(mails, n = 6) {
+  return (mails || []).slice(0, n).map(m => ({ kind: 'mail', id: m.id, shipmentId: m.shipmentId || '', label: `${S.fmt(m.date)} · ${m.from} · ${String(m.subject || '').slice(0, 60)}` }));
+}
+
+export function createChat({ store, shipDb = null, chatPath, env = process.env, llm = llmService(env), sendGraphMail = null, attachmentSource = null, now = () => Date.now() }) {
   const chat = openChatStore(chatPath);
   const view = shipmentsView(store, shipDb);
   const sendEnabled = env.MAIL_SEND_ENABLED === 'true' && env.MAIL_SEND_APPROVED === 'true';
   const mock = env.INTEGRATION_MOCK === 'true';
+  // Conservación de binarios de adjuntos: desactivada por defecto; exige activación explícita en
+  // configuración (CHAT_ATTACH_STORE=true) y una fuente autorizada y configurada (attachmentSource).
+  // Topes duros: 5 MB por archivo, 40 MB y 200 archivos en total. Nunca se descarga nada nuevo del
+  // buzón: solo se conserva lo que la fuente autorizada ya tiene disponible.
+  const ATTACH = { enabled: env.CHAT_ATTACH_STORE === 'true', dir: env.CHAT_ATTACH_DIR || (chatPath + '.adjuntos'), maxFile: 5e6, maxTotal: 40e6, maxFiles: 200 };
 
   const findMail = (id) => view.mail(id);
   function pendingForShipment(shipmentId) {
@@ -151,8 +163,9 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
     const g = view.get(id);
     if (!g) return null;
     const pending = pendingForShipment(id);
-    const lines = [fmtShipment(g.shipment, g.summary), 'Acciones recomendadas:', ...recommendedActions(g.shipment, g.summary, pending).map(x => '- ' + x)];
-    return { text: lines.join('\n'), shipment: g.shipment, summary: g.summary, mails: g.mails };
+    const actions = recommendedActions(g.shipment, g.summary, pending);
+    const lines = [fmtShipment(g.shipment, g.summary), 'Acciones recomendadas:', ...actions.map((x, i) => `- ${x.t} [fuente ${i + 1}]`), 'Fuentes:', ...actions.map((x, i) => `${i + 1}. ${x.src.label}`)];
+    return { text: lines.join('\n'), shipment: g.shipment, summary: g.summary, mails: g.mails, sources: actions.map(x => x.src) };
   }
 
   function addProposal(personKey, kind, payload, describe) {
@@ -173,20 +186,53 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
     const state = cur.state;
     const c = C.newCase(mail ? 'Exp: ' + String(mail.subject || mail.id).slice(0, 80) : 'Exp: envío ' + ship.id, 'Formato genérico');
     if (ship) c.notes = `Envío ${ship.id} (${ship.client || '?'} → ${ship.provider || '?'}${ship.dua ? ', DUA ' + ship.dua : ''}).`;
+    let savedBin = 0, missingBin = 0;
     if (mail) {
       c.mail = { threadId: mail.threadId || '', from: mail.from || '', received: mail.date || '', body: String(mail.body || '').slice(0, 20000), thread: [], messageIds: [mail.id] };
       // Adjuntos: se conserva lo que el receptor YA descargó y leyó del correo — nombres, estado por
       // adjunto y texto extraído (máx. 8000 caracteres, ver server/receiver.mjs). Los archivos binarios
-      // NO se guardan en la app y el chat NO descarga nada nuevo del buzón.
+      // solo se conservan si CHAT_ATTACH_STORE=true y hay una fuente autorizada configurada; el chat
+      // NUNCA descarga nada nuevo del buzón. Cuando un binario no existe, se destaca explícitamente.
       const infos = Array.isArray(mail.attachmentsInfo) ? mail.attachmentsInfo : (mail.attachments || []).map(n => ({ name: n, status: 'sin_texto', note: 'Sin lectura registrada' }));
-      for (const info of infos) c.documents.push({ name: info.name, text: `Adjunto del correo ${mail.id}. Estado de lectura: ${S.ATT_LABEL[info.status] || info.status}. ${info.note || ''}`.trim(), type: 'adjunto-correo' });
+      const doc0 = chat.read();
+      for (const info of infos) {
+        const lectura = `Estado de lectura: ${S.ATT_LABEL[info.status] || info.status}. ${info.note || ''}`.trim();
+        if (!ATTACH.enabled || !attachmentSource) {
+          c.documents.push({ name: info.name, text: `Adjunto del correo ${mail.id}. ${lectura} SIN BINARIO: ${ATTACH.enabled ? 'no hay fuente autorizada de adjuntos configurada' : 'conservación de binarios desactivada (CHAT_ATTACH_STORE)'}.`, type: 'adjunto-correo' });
+          missingBin++;
+          continue;
+        }
+        try {
+          const got = await attachmentSource(mail.id, info.name);
+          const bytes = got?.bytes?.length || 0;
+          if (!bytes) { c.documents.push({ name: info.name, text: `Adjunto del correo ${mail.id}. ${lectura} SIN BINARIO DISPONIBLE: la fuente autorizada no lo tiene (no descargado, borrado o modo simulación).`, type: 'adjunto-correo' }); missingBin++; continue; }
+          if (bytes > ATTACH.maxFile || (doc0.attachBytes || 0) + bytes > ATTACH.maxTotal || (doc0.attachFiles || 0) >= ATTACH.maxFiles) {
+            c.documents.push({ name: info.name, text: `Adjunto del correo ${mail.id}. ${lectura} BINARIO NO CONSERVADO: límite de almacenamiento (máx. ${ATTACH.maxFile / 1e6} MB/archivo, ${ATTACH.maxTotal / 1e6} MB y ${ATTACH.maxFiles} archivos en total).`, type: 'adjunto-correo' });
+            missingBin++;
+            continue;
+          }
+          const sha = createHash('sha256').update(got.bytes).digest('hex');
+          const safe = String(info.name).replace(/[^A-Za-z0-9._-]/g, '_').slice(-60);
+          const fname = `${c.id}-${sha.slice(0, 12)}-${safe}`;
+          mkdirSync(ATTACH.dir, { recursive: true });
+          writeFileSync(ATTACH.dir + '/' + fname, got.bytes, { mode: 0o600 });
+          doc0.attachBytes = (doc0.attachBytes || 0) + bytes;
+          doc0.attachFiles = (doc0.attachFiles || 0) + 1;
+          c.documents.push({ name: info.name, text: `Adjunto conservado como archivo: ${fname} (${bytes} B, sha256 ${sha.slice(0, 16)}…). Verifica el contenido contra el original del correo.`, file: fname, bytes, sha256: sha, type: 'adjunto-binario' });
+          savedBin++;
+        } catch {
+          c.documents.push({ name: info.name, text: `Adjunto del correo ${mail.id}. ${lectura} SIN BINARIO DISPONIBLE: error al recuperarlo de la fuente autorizada.`, type: 'adjunto-correo' });
+          missingBin++;
+        }
+      }
+      if (savedBin || missingBin) await chat.mutate(() => { const d = chat.read(); d.attachBytes = doc0.attachBytes; d.attachFiles = doc0.attachFiles; });
       if (mail.attachmentText) c.documents.push({ name: 'Texto extraído de los adjuntos (combinado, sin verificar)', text: String(mail.attachmentText).slice(0, 8000), type: 'adjunto-texto' });
-      c.notes = (c.notes ? c.notes + ' ' : '') + `Origen: chat, correo ${mail.id}${mail.threadId ? ' del hilo ' + mail.threadId : ''}. Se conservan nombres y texto ya extraído de adjuntos; los archivos no se descargan ni se guardan como binario.`;
+      c.notes = (c.notes ? c.notes + ' ' : '') + `Origen: chat, correo ${mail.id}${mail.threadId ? ' del hilo ' + mail.threadId : ''}. Adjuntos: ${savedBin} con binario conservado, ${missingBin} sin binario (destacado en cada documento); nunca se descarga nada nuevo del buzón.`;
     }
     C.audit(c, 'Expediente preparado por el asistente de chat a petición de ' + p.person + '; requiere completar datos y revisión humana');
     state.cases.unshift(c);
     await store.write(cur.revision, state, cur.docH);
-    return { caseId: c.id, message: `Expediente creado: "${c.title}" (${c.documents.length} documento(s) conservados). Está en borrador, sin revisión: ábrelo en Expedientes.` };
+    return { caseId: c.id, message: `Expediente creado: "${c.title}"${mail ? ` (${savedBin} adjunto(s) con binario conservado, ${missingBin} sin binario disponible, destacado en cada documento)` : ''}. Está en borrador, sin revisión: ábrelo en Expedientes.` };
   }
 
   async function execPrepareDraft(p) {
@@ -244,7 +290,7 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
     const nt = S.norm(text);
     const targets = detectTargets(view, text);
     const proposals = [];
-    let answer = '';
+    let answer = '', autoExec = null, sources = [];
     if (RE.prepareCase.test(nt)) {
       if (!targets.length) answer = 'No encuentro el envío o correo en los datos. Indícame la referencia (p. ej. TR-0412), el DUA o el expediente.';
       else {
@@ -253,7 +299,7 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
         const byDate = (g?.mails || []).slice().sort((a, b) => Date.parse(b.date || 0) - Date.parse(a.date || 0));
         const withAtt = byDate.find(m => (m.attachmentsInfo || []).length || (m.attachments || []).length);
         const mailId = (withAtt || byDate[0])?.id || null;
-        const prop = addProposal(personKey, 'prepare_case', { shipmentId: id, mailId }, `Preparar expediente desde ${mailId ? 'el correo con adjuntos más reciente de ' + id : 'la ficha de ' + id} (conserva adjuntos ya leídos: nombres, estado y texto extraído; sin binarios)`);
+        const prop = addProposal(personKey, 'prepare_case', { shipmentId: id, mailId }, `Preparar expediente desde ${mailId ? 'el correo con adjuntos más reciente de ' + id : 'la ficha de ' + id} (conserva adjuntos ya leídos: nombres, estado y texto extraído; binarios solo si la conservación está activada y autorizada en configuración)`);
         proposals.push(prop);
         answer = `Puedo preparar un expediente de ${id} con lo ya leído de sus correos y adjuntos. Quedará en borrador y pendiente de revisión humana. Confírmalo abajo.`;
       }
@@ -275,16 +321,26 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
         else if (!pol.allow.map(x => x.toLowerCase()).includes(g.shipment.providerDomain)) answer = `El dominio ${g.shipment.providerDomain} no está en tu política de envío (${pol.allow.join(', ')}). No preparo el envío; sí un borrador.`;
         else {
           const prop = addProposal(personKey, 'send_reply', { to, subject: 'RE: envío ' + id, body: `Hola,\n\nConfirmamos la recepción de la documentación del envío ${id}. Cualquier incidencia la comunicamos por este hilo.\n\nGracias.`, shipmentId: id }, `ENVIAR respuesta a ${to} sobre ${id} (cuenta configurada, auditado, tope ${pol.perDay || 5}/día)`);
-          proposals.push(prop);
-          answer = `Puedo enviar una respuesta a ${to} sobre ${id} con tu política (${pol.allow.join(', ')}, máx. ${pol.perDay || 5}/día). Es un envío real si la cuenta está conectada; revísalo y confírmalo abajo.`;
+          if (pol.auto) {
+            // Autonomía real dentro del alcance concedido: la política del admin lo autoriza
+            // explícitamente (auto:true, revocable y auditado); se ejecuta sin confirmación
+            // individual. La cadena de comprobaciones de execSendReply sigue aplicándose entera.
+            autoExec = prop;
+            answer = `Tu política de envío autónomo (${pol.allow.join(', ')}, máx. ${pol.perDay || 5}/día, concedida por ${pol.by}) autoriza esta respuesta a ${to} sobre ${id}: la ejecuto ahora sin confirmación individual. Todo queda auditado.`;
+          } else {
+            proposals.push(prop);
+            answer = `Puedo enviar una respuesta a ${to} sobre ${id} con tu política (${pol.allow.join(', ')}, máx. ${pol.perDay || 5}/día). Es un envío real si la cuenta está conectada; revísalo y confírmalo abajo.`;
+          }
         }
       }
     } else if (RE.actions.test(nt) && targets.length) {
       const b = shipmentBlock(targets[0]);
       answer = b ? b.text : 'No encuentro ese envío.';
+      sources = b?.sources || [];
     } else if (RE.mails.test(nt) && targets.length) {
       const g = view.get(targets[0]);
-      answer = g ? `Correos de ${targets[0]} (${g.mails.length}):\n` + (summarizeMails(g.mails) || 'Sin correos registrados.') : 'No encuentro ese envío.';
+      answer = g ? `Correos de ${targets[0]} (${g.mails.length}), resumidos; cada fuente es navegable:\n` + (summarizeMails(g.mails) || 'Sin correos registrados.') : 'No encuentro ese envío.';
+      sources = g ? mailSources(g.mails) : [];
     } else if (RE.overview.test(nt)) {
       const st = view.stats();
       const pend = view.pending().length;
@@ -292,10 +348,76 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
     } else if (targets.length) {
       const b = shipmentBlock(targets[0]);
       answer = b ? b.text : 'No encuentro ese envío.';
+      sources = b?.sources || [];
     } else {
       answer = 'Asistente de reglas locales. Puedo: resumir envíos y correos ("¿cómo van los envíos?"), dar acciones recomendadas de un envío ("acciones recomendadas de TR-0412"), preparar un expediente o un borrador ("prepárame un expediente de TR-0412") y, si un administrador lo autoriza, enviar una respuesta. Las acciones siempre se confirman antes de ejecutarse.';
     }
-    return { answer, proposals, targets };
+    return { answer, proposals, targets, sources, autoExec };
+  }
+
+  // ---- herramientas de investigación para el modelo real (las ejecutan las reglas, nunca el modelo) ----
+  // Protocolo: el modelo responde O texto final O una línea JSON {"tool":...,"...":...}; el servidor
+  // ejecuta la consulta contra los datos y devuelve el resultado como siguiente mensaje. Máx. 3 rondas.
+  function runTool(call) {
+    const q = (x, n = 200) => String(x ?? '').slice(0, n);
+    if (call.tool === 'buscar_envios') {
+      const hits = (view.search(q(call.query, 120)) || []).slice(0, 5);
+      return { envios: hits.map(h => { const g = view.get(h.shipmentId); return g ? { id: h.shipmentId, ficha: q(fmtShipment(g.shipment, g.summary), 400) } : { id: h.shipmentId }; }) };
+    }
+    if (call.tool === 'detalle_envio') {
+      const b = shipmentBlock(q(call.id, 40));
+      return b ? { ficha: q(b.text, 1500) } : { error: 'envío no encontrado' };
+    }
+    if (call.tool === 'hilo_envio') {
+      const g = view.get(q(call.id, 40));
+      return g ? { correos: g.mails.slice(0, 10).map(m => ({ id: m.id, fecha: m.date, de: q(m.from, 80), asunto: q(m.subject, 120), extracto: q(m.body, 200), adjuntos: m.attachments || [] })) } : { error: 'envío no encontrado' };
+    }
+    if (call.tool === 'correo') {
+      const m = findMail(q(call.id, 60));
+      return m ? { id: m.id, fecha: m.date, de: q(m.from, 80), asunto: q(m.subject, 120), cuerpo: q(m.body, 3000), adjuntos: m.attachments || [] } : { error: 'correo no encontrado' };
+    }
+    return { error: 'herramienta desconocida' };
+  }
+
+  function parseToolRequest(text) {
+    let t = String(text || '').trim();
+    const fence = t.match(/^```(?:json)?\s*([\s\S]*?)```$/);
+    if (fence) t = fence[1].trim();
+    if (!t.startsWith('{')) return null;
+    try {
+      const j = JSON.parse(t);
+      if (['buscar_envios', 'detalle_envio', 'hilo_envio', 'correo'].includes(j.tool)) return j;
+    } catch {}
+    return null;
+  }
+
+  const TOOL_HELP = 'Puedes investigar antes de responder: responde SOLO con una línea JSON {"tool":"buscar_envios","query":"..."}, {"tool":"detalle_envio","id":"..."}, {"tool":"hilo_envio","id":"..."} o {"tool":"correo","id":"..."} y el servidor te dará el resultado. Cuando tengas bastante, responde en texto normal. Máximo 3 consultas.';
+
+  // Conversación multiturno real con el proveedor: la pregunta libre viaja con el contexto recuperado
+  // por las reglas; el modelo puede pedir más datos con las herramientas (rondas extra de API).
+  async function aiReply(me, modelRef, text, rulesOut) {
+    const ctx = {
+      untrusted_context: {
+        pregunta: text.slice(0, 1000),
+        respuesta_base_de_reglas: rulesOut.answer,
+        envios_citados: rulesOut.targets.slice(0, 3).map(id => { const g = view.get(id); return g ? { ficha: fmtShipment(g.shipment, g.summary), ultimos_correos: summarizeMails(g.mails, 3) } : null; }).filter(Boolean),
+        propuestas_de_accion: rulesOut.proposals.map(p => p.describe),
+        herramientas: TOOL_HELP,
+      },
+    };
+    const messages = [{ role: 'user', content: JSON.stringify(ctx) }];
+    let last = null;
+    for (let round = 0; round < 4; round++) {
+      me.aiUsed++;
+      const r = await llm.complete({ ref: modelRef, system: SYSTEM_PROMPT, messages, maxTokens: 700 });
+      last = r;
+      const req = parseToolRequest(r.text);
+      if (!req || round === 3) return { text: req ? 'El modelo agotó las rondas de investigación: respondo con las reglas locales.\n\n' + rulesOut.answer : r.text, model: r.model, rounds: round + 1, toolsUsed: round };
+      messages.push({ role: 'assistant', content: r.text });
+      messages.push({ role: 'user', content: JSON.stringify({ resultado_herramienta: runTool(req) }) });
+      if (me.aiUsed >= MAX_AI_PER_DAY) return { text: 'Tope diario de IA durante la investigación: respondo con las reglas locales.\n\n' + rulesOut.answer, model: r.model, rounds: round + 1, toolsUsed: round };
+    }
+    return { text: last.text, model: last.model, rounds: 4, toolsUsed: 3 };
   }
 
   return {
@@ -308,7 +430,7 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
         person: personKey, model: me.model || 'sim:reglas', models: llm.catalog,
         messages: (me.messages || []).slice(-50),
         proposals: Object.values(doc.proposals).filter(p => p.person === personKey && p.status === 'pending'),
-        policy: me.policy ? { allow: me.policy.allow, purpose: me.policy.purpose, perDay: me.policy.perDay, by: me.policy.by, at: me.policy.at, revoked: !!me.policy.revoked } : null,
+        policy: me.policy ? { allow: me.policy.allow, purpose: me.policy.purpose, perDay: me.policy.perDay, auto: !!me.policy.auto, by: me.policy.by, at: me.policy.at, revoked: !!me.policy.revoked } : null,
         sendEnabled,
       };
     },
@@ -323,14 +445,16 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
         allow: [...new Set((policy.allow || []).map(x => String(x).toLowerCase().trim()).filter(x => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(x)))].slice(0, 20),
         purpose: String(policy.purpose || '').slice(0, 200),
         perDay: Math.min(Math.max(1, Number(policy.perDay) || 5), 50),
+        // auto:true = autonomía real: envíos dentro del alcance sin confirmación individual. Por defecto false.
+        auto: policy.auto === true,
         revoked: policy.revoked === true,
         by: String(byName || 'admin').slice(0, 40), at: new Date().toISOString(),
       };
       if (!clean.revoked && (!clean.allow.length || !clean.purpose)) throw Error('POLICY_INCOMPLETE');
-      chat.audit({ person: targetKey, kind: 'policy', by: clean.by, allow: clean.allow, revoked: clean.revoked, result: clean.revoked ? 'REVOKED' : 'GRANTED' });
+      chat.audit({ person: targetKey, kind: 'policy', by: clean.by, allow: clean.allow, auto: clean.auto, revoked: clean.revoked, result: clean.revoked ? 'REVOKED' : 'GRANTED' });
       return chat.mutate(() => { chat.person(targetKey).policy = clean; });
     },
-    async message(personKey, text, { canWrite }) {
+    async message(personKey, text, { canWrite, session = null }) {
       text = String(text || '').trim();
       if (!text || text.length > 2000) throw Error('INVALID_MESSAGE');
       const doc = chat.read();
@@ -341,39 +465,44 @@ export function createChat({ store, shipDb = null, chatPath, env = process.env, 
       me.used++;
       const modelRef = me.model || 'sim:reglas';
       const model = llm.get(modelRef);
-      const { answer, proposals, targets } = rulesReply(personKey, text);
-      let finalText = answer, usedModel = null, aiError = null;
-      if (model && !model.simulated && model.ready) {
+      const rulesOut = rulesReply(personKey, text);
+      const { answer, proposals, targets, sources } = rulesOut;
+      let finalText = answer, usedModel = null, aiError = null, aiRounds = 0;
+      // Autonomía real bajo política explícita: la propuesta se ejecuta ya, sin confirmación individual.
+      if (rulesOut.autoExec) {
+        const prop = rulesOut.autoExec;
+        try {
+          const out = await execSendReply(prop, session);
+          await chat.mutate(() => { prop.status = 'done'; prop.result = out.message; prop.auto = true; });
+          finalText = answer + '\n\nEjecutado: ' + out.message;
+        } catch (e) {
+          await chat.mutate(() => { prop.status = 'failed'; prop.result = String(e.message); prop.auto = true; });
+          finalText = answer + '\n\nNO ejecutado: ' + e.message + '. La denegación queda auditada.';
+        }
+      }
+      if (model && !model.simulated && model.ready && !rulesOut.autoExec) {
         if (me.aiDay !== today) { me.aiDay = today; me.aiUsed = 0; }
         if (me.aiUsed >= MAX_AI_PER_DAY) {
           aiError = 'Tope diario de llamadas a IA alcanzado: respuesta con reglas locales.';
         } else {
-          me.aiUsed++;
-          const ctx = {
-            untrusted_context: {
-              pregunta: text.slice(0, 1000),
-              respuesta_base_de_reglas: answer,
-              envios_citados: targets.slice(0, 3).map(id => { const g = view.get(id); return g ? { ficha: fmtShipment(g.shipment, g.summary), ultimos_correos: summarizeMails(g.mails, 3) } : null; }).filter(Boolean),
-              propuestas_de_accion: proposals.map(p => p.describe),
-            },
-          };
           try {
-            const r = await llm.complete({ ref: modelRef, system: SYSTEM_PROMPT, messages: [{ role: 'user', content: JSON.stringify(ctx) }], maxTokens: 700 });
-            finalText = r.text;
+            const r = await aiReply(me, modelRef, text, rulesOut);
+            finalText = (rulesOut.autoExec ? finalText + '\n\n' : '') + r.text;
             usedModel = r.model;
-          } catch (e) { aiError = 'El modelo externo no respondió (' + e.message + '): respuesta con reglas locales.'; me.aiUsed--; }
+            aiRounds = r.rounds;
+          } catch (e) { aiError = 'El modelo externo no respondió (' + e.message + '): respuesta con reglas locales.'; }
         }
       }
-      const label = usedModel ? `Redactado por ${usedModel} (IA externa) sobre datos y acciones verificados por las reglas del servidor.` : 'SIMULACIÓN · asistente de reglas locales, sin IA externa. Las respuestas y borradores son plantillas, no texto generado por IA.';
+      const label = usedModel ? `Redactado por ${usedModel} (IA externa) sobre datos recuperados por las reglas del servidor${aiRounds > 1 ? `, con ${aiRounds - 1} consulta(s) de investigación` : ''}.` : 'SIMULACIÓN · asistente de reglas locales, sin IA externa. Las respuestas y borradores son plantillas, no texto generado por IA.';
       const entry = [
         { role: 'user', text: text.slice(0, 2000), at: new Date().toISOString() },
-        { role: 'assistant', text: finalText, at: new Date().toISOString(), label, model: usedModel || 'reglas', aiError, proposals: proposals.map(p => p.id) },
+        { role: 'assistant', text: finalText, at: new Date().toISOString(), label, model: usedModel || 'reglas', aiError, proposals: proposals.map(p => p.id), sources },
       ];
       await chat.mutate(() => {
         me.messages.push(...entry);
         if (me.messages.length > MAX_MESSAGES) me.messages = me.messages.slice(-MAX_MESSAGES);
       });
-      return { reply: finalText, label, model: usedModel || 'reglas', aiError, proposals, state: this.state(personKey) };
+      return { reply: finalText, label, model: usedModel || 'reglas', aiError, proposals, sources, state: this.state(personKey) };
     },
     async confirm(personKey, proposalId, accept, { canWrite, session }) {
       if (!canWrite) throw Object.assign(Error('ROLE_CANNOT_WRITE'), { code: 'ROLE_CANNOT_WRITE' });
