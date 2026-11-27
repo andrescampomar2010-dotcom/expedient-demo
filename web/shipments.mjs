@@ -323,10 +323,19 @@ export function assignTask(state, shipmentId, taskId, who) {
   t.who = String(who || ''); return t;
 }
 export function assignShipment(state, shipmentId, who) { const sh = shipmentOf(state, shipmentId); sh.assignee = String(who || ''); return sh; }
-export function openTasks(state) {
+export function openTasksFromItems(items) {
   const out = [];
-  for (const sh of ensure(state).items) for (const t of sh.tasks || []) if (!t.done) out.push({ shipmentId: sh.id, route: sh.route, client: sh.client, assignee: sh.assignee || '', task: t });
+  for (const sh of items || []) for (const t of sh.tasks || []) if (!t.done) out.push({ shipmentId: sh.id, route: sh.route, client: sh.client, assignee: sh.assignee || '', task: t });
   return out;
+}
+export function openTasks(state) { return openTasksFromItems(ensure(state).items); }
+// Alcance de los recuentos en modo servidor: se consultan TODOS los envíos abiertos (tope 200), no solo la página en pantalla.
+// El aviso se muestra en la propia vista cuando hay paginación o tope, para que nadie crea ver el total si no es así.
+export function taskScopeNote(loadedOpen, total) {
+  const n = Number(loadedOpen) || 0, t = Number(total) || 0;
+  if (n >= 200) return 'Recuento sobre los primeros 200 envíos abiertos (tope de consulta): puede faltar alguno. Los entregados no se incluyen.';
+  if (t > n) return 'Recuento sobre ' + n + ' envíos abiertos de ' + t + ' en total. Los entregados no se incluyen.';
+  return 'Recuento sobre los ' + n + ' envíos abiertos. Los entregados no se incluyen.';
 }
 export function staleDays(sh, ref = new Date()) {
   const last = sh.events && sh.events.length ? sh.events[sh.events.length - 1].date : sh.created;
